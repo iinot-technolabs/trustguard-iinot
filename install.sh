@@ -2,7 +2,7 @@
 # =============================================================================
 # TrustGuard IIoT — One-Command Installer
 # Usage:
-#   git clone https://github.com/iinot/trustguard-iinot
+#   git clone https://github.com/iinot-technolabs/trustguard-iinot.git
 #   cd trustguard-iinot && sudo bash install.sh
 #
 # What this does:
