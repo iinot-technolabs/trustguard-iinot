@@ -3,6 +3,7 @@ import { useState, useEffect } from 'react'
 import LoginPage           from './LoginPage'
 import SupervisorView      from './SupervisorView'
 import AuditorView         from './AuditorView'
+import AdminView           from './AdminView'
 import ConfigureNetworkPage from './ConfigureNetworkPage'
 import RulesDesignerPage   from './RulesDesignerPage'
 import DeployPage from './DeployPage'
@@ -76,7 +77,9 @@ export default function App() {
     return <LoginPage onLogin={(s) => { setSession(s); setView('dashboard') }} />
   }
 
-  const isAdmin = session.role === 'supervisor' || session.role === 'admin'
+  // Admin: the new dedicated bootstrap role (no Fabric dependency)
+  // Supervisor: operational role — can view the dashboard, but NOT the network config / deploy tabs
+  const isAdmin = session.role === 'admin'
 
   // Called by ConfigureNetworkPage when user previews/generates — we grab the config
   const handleNetworkConfigChange = (cfg) => {
@@ -117,23 +120,24 @@ export default function App() {
 
           {/* Dashboard tab — always visible */}
           <button onClick={() => setView('dashboard')} style={tabStyle(view === 'dashboard')}>
-            📊 Dashboard
+            {isAdmin ? '🔧 Admin' : '📊 Dashboard'}
           </button>
 
-          {/* Network Designer — supervisor / admin only */}
+          {/* Network Designer — admin only */}
           {isAdmin && (
             <button onClick={() => setView('configure')} style={tabStyle(view === 'configure')}>
               ⚙️ Network Designer
             </button>
           )}
 
-          {/* Rules Designer — supervisor / admin only */}
+          {/* Rules Designer — admin only */}
           {isAdmin && (
             <button onClick={() => setView('rules')} style={tabStyle(view === 'rules')}>
               🔐 Rules Designer
             </button>
           )}
 
+          {/* Deploy — admin only */}
           {isAdmin && (
             <button onClick={() => setView('deploy')} style={tabStyle(view === 'deploy')}>
               🚀 Deploy
@@ -163,7 +167,7 @@ export default function App() {
 
       {/* ── Page Views ── */}
 
-      {view === 'configure' && (
+      {view === 'configure' && isAdmin && (
         <ConfigureNetworkPage
           onBack={() => setView('dashboard')}
           onConfigChange={handleNetworkConfigChange}
@@ -171,7 +175,7 @@ export default function App() {
         />
       )}
 
-      {view === 'rules' && (
+      {view === 'rules' && isAdmin && (
         <RulesDesignerPage
           networkConfig={networkConfig}
           onBack={() => setView('dashboard')}
@@ -179,13 +183,22 @@ export default function App() {
         />
       )}
 
-      {view === 'deploy' && (
+      {view === 'deploy' && isAdmin && (
         <DeployPage
           networkConfig={networkConfig}
           onBack={() => setView('dashboard')}
         />
       )}
 
+      {/* Admin dashboard — bootstrap guide */}
+      {view === 'dashboard' && isAdmin && (
+        <AdminView
+          session={session}
+          onNavigate={(v) => setView(v)}
+        />
+      )}
+
+      {/* Supervisor dashboard — incident monitoring */}
       {view === 'dashboard' && session.role === 'supervisor' && (
         <SupervisorView session={session} />
       )}

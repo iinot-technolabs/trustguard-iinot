@@ -40,12 +40,17 @@ const generateConfigsRoute = require('./routes/generateConfigsRoute');
 app.use('/api', generateConfigsRoute);
 app.use('/api/network-config', require('./routes/networkConfigRoute'));
 
-// Existing routes
+// Fabric-identity auth (supervisor1, auditor1, gateway1)
 app.use('/api/auth',      require('./routes/auth'));
+
+// Admin auth — local password only, no Fabric dependency
+const { router: adminAuthRouter } = require('./routes/adminAuth');
+app.use('/api/admin', adminAuthRouter);
+
+// Other routes
 app.use('/api/incidents', require('./routes/incidents'));
 const deployRoute = require('./routes/deploy');
 app.use('/api/deploy', deployRoute);
-app.use('/api/network-config', require('./routes/networkConfigRoute'));
 
 // ── Health ───────────────────────────────────────────────────────────────────
 app.get('/health', (req, res) =>

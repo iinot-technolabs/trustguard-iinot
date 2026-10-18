@@ -173,6 +173,13 @@ SERVER_HOST="${SERVER_HOST:-$(curl -s ifconfig.me 2>/dev/null || echo '127.0.0.1
 
 if [[ -f "${ENV_FILE}" ]]; then
   ok ".env already exists — keeping it."
+  # Ensure ADMIN_PASSWORD is present even in existing .env files
+  if ! grep -q "^ADMIN_PASSWORD=" "${ENV_FILE}"; then
+    echo "" >> "${ENV_FILE}"
+    echo "# Admin bootstrap password (no Fabric dependency)" >> "${ENV_FILE}"
+    echo "ADMIN_PASSWORD=TrustGuard@Admin123" >> "${ENV_FILE}"
+    warn "ADMIN_PASSWORD was missing from .env — added default. Change it before going to production!"
+  fi
 else
   cat > "${ENV_FILE}" <<EOF
 # TrustGuard IIoT — Server Environment
@@ -198,8 +205,13 @@ CHANNEL_NAME=safetychannel
 CHAINCODE_NAME=safetycontract
 PEER_ENDPOINT=localhost:7051
 PEER_HOST_OVERRIDE=peer0.iinot-industry.com
+
+# Admin bootstrap password (no Fabric dependency)
+# Change this before going to production!
+ADMIN_PASSWORD=TrustGuard@Admin123
 EOF
   ok ".env written with server paths."
+  warn "Default ADMIN_PASSWORD set to 'TrustGuard@Admin123'. Change it in .env before going to production!"
 fi
 
 # Patch any remaining hardcoded /root/fabric/... paths in scripts
@@ -330,8 +342,12 @@ echo -e "  Open this URL in your browser to continue:"
 echo ""
 echo -e "      ${BOLD}http://${HOST}/${NC}"
 echo ""
-echo -e "  From the dashboard:"
-echo -e "   1. Go to ${BOLD}Configure Network${NC}"
+echo -e "  First-time setup (Admin login required):"
+echo -e "   Click ${BOLD}Admin Login${NC} on the login page"
+echo -e "   Default password: ${BOLD}TrustGuard@Admin123${NC}  ← change in .env!"
+echo ""
+echo -e "  From the Admin dashboard:"
+echo -e "   1. Go to ${BOLD}Network Designer${NC}"
 echo -e "      → Enter your organisation names, domains, ports, and channel name"
 echo -e "      → Set up access roles in the ${BOLD}Rules Designer${NC}"
 echo -e "      → Click ${BOLD}Save Configuration${NC}"
@@ -340,12 +356,16 @@ echo -e "   2. Go to ${BOLD}Deploy${NC}"
 echo -e "      → Click ${BOLD}Deploy Network${NC}"
 echo -e "      → Watch the live log — the full Fabric network will come up in ~3 min"
 echo ""
-echo -e "  ─────────────────────────────────────────────────────────"
+echo -e "   3. Click ${BOLD}Enroll Identities${NC} on the Admin dashboard"
+echo -e "      → This registers supervisor1, auditor1, gateway1 with the Fabric CA"
+echo -e "      → After enrolment, those users can log in with their identity cards"
+echo ""
+echo -e "  ─────────────────────────────────────────────────────"
 echo -e "  Useful commands:"
 echo -e "   journalctl -fu trustguard-backend              # live backend logs"
 echo -e "   bash scripts/preflight-check.sh               # verify before first deploy"
 echo -e "   bash iinot-network/scripts/network.sh down    # tear down containers"
-echo -e "  ─────────────────────────────────────────────────────────"
+echo -e "  ─────────────────────────────────────────────────────"
 echo ""
 echo -e "  Install log saved to: ${LOG_FILE}"
 echo ""

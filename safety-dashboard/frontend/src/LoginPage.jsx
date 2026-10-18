@@ -25,9 +25,14 @@ const IDENTITIES = [
 ]
 
 export default function LoginPage({ onLogin }) {
-  const [loading, setLoading] = useState(null)
-  const [error, setError]     = useState(null)
+  const [loading,       setLoading]       = useState(null)   // identity id being loaded
+  const [error,         setError]         = useState(null)
+  const [showAdminForm, setShowAdminForm] = useState(false)
+  const [adminPassword, setAdminPassword] = useState('')
+  const [adminLoading,  setAdminLoading]  = useState(false)
+  const [adminError,    setAdminError]    = useState(null)
 
+  // ── Fabric identity login ──────────────────────────────────────────────────
   async function handleSelect(identity) {
     setLoading(identity)
     setError(null)
@@ -38,6 +43,21 @@ export default function LoginPage({ onLogin }) {
       setError(err.response?.data?.error || 'Login failed — is the backend running?')
     } finally {
       setLoading(null)
+    }
+  }
+
+  // ── Admin password login ───────────────────────────────────────────────────
+  async function handleAdminLogin(e) {
+    e.preventDefault()
+    setAdminLoading(true)
+    setAdminError(null)
+    try {
+      const res = await axios.post(`${API}/admin/login`, { password: adminPassword })
+      if (res.data.success) onLogin(res.data)
+    } catch (err) {
+      setAdminError(err.response?.data?.error || 'Admin login failed.')
+    } finally {
+      setAdminLoading(false)
     }
   }
 
@@ -57,6 +77,7 @@ export default function LoginPage({ onLogin }) {
         </p>
       </div>
 
+      {/* ── Fabric identity cards ────────────────────────────────────────── */}
       <div style={{
         display: 'flex', gap: '16px',
         flexWrap: 'wrap', justifyContent: 'center', maxWidth: '860px'
@@ -65,14 +86,14 @@ export default function LoginPage({ onLogin }) {
           <button
             key={id.id}
             onClick={() => handleSelect(id.id)}
-            disabled={loading !== null}
+            disabled={loading !== null || showAdminForm}
             style={{
               background: loading === id.id ? id.color : '#FFFFFF',
               border: `2px solid ${id.color}`,
               borderRadius: '12px', padding: '24px 28px',
-              cursor: loading ? 'not-allowed' : 'pointer',
+              cursor: (loading || showAdminForm) ? 'not-allowed' : 'pointer',
               width: '240px', textAlign: 'left',
-              opacity: loading && loading !== id.id ? 0.5 : 1,
+              opacity: (loading && loading !== id.id) || showAdminForm ? 0.5 : 1,
               transition: 'all 0.15s'
             }}
           >
@@ -102,6 +123,7 @@ export default function LoginPage({ onLogin }) {
         ))}
       </div>
 
+      {/* ── Fabric error ─────────────────────────────────────────────────── */}
       {error && (
         <div style={{
           marginTop: '24px', background: '#FBEAE8',
@@ -112,6 +134,106 @@ export default function LoginPage({ onLogin }) {
           ⚠️ {error}
         </div>
       )}
+
+      {/* ── Admin login section ───────────────────────────────────────────── */}
+      <div style={{ marginTop: '36px', textAlign: 'center' }}>
+        {!showAdminForm ? (
+          <button
+            onClick={() => { setShowAdminForm(true); setError(null); }}
+            style={{
+              background: 'transparent',
+              border: '1px solid #02C39A',
+              color: '#02C39A',
+              borderRadius: '6px',
+              padding: '6px 16px',
+              cursor: 'pointer',
+              fontSize: '13px',
+            }}
+          >
+            🔧 Admin Login
+          </button>
+        ) : (
+          <div style={{
+            background: 'rgba(255,255,255,0.07)',
+            border: '1px solid #02C39A',
+            borderRadius: '12px',
+            padding: '24px 28px',
+            width: '320px',
+            textAlign: 'left',
+          }}>
+            <div style={{ color: '#02C39A', fontWeight: 700, fontSize: '15px', marginBottom: '4px' }}>
+              🔧 Admin Login
+            </div>
+            <div style={{ color: '#A0C4BF', fontSize: '12px', marginBottom: '16px' }}>
+              Network bootstrap — no enrolled identities required
+            </div>
+
+            <form onSubmit={handleAdminLogin}>
+              <input
+                type="password"
+                placeholder="Admin password"
+                value={adminPassword}
+                onChange={e => setAdminPassword(e.target.value)}
+                autoFocus
+                style={{
+                  width: '100%',
+                  padding: '10px 12px',
+                  borderRadius: '6px',
+                  border: '1px solid #CBD5E1',
+                  fontSize: '14px',
+                  boxSizing: 'border-box',
+                  marginBottom: '12px',
+                }}
+              />
+
+              {adminError && (
+                <div style={{
+                  marginBottom: '12px',
+                  color: '#FF6B6B',
+                  fontSize: '12px',
+                }}>
+                  ⚠️ {adminError}
+                </div>
+              )}
+
+              <div style={{ display: 'flex', gap: '8px' }}>
+                <button
+                  type="submit"
+                  disabled={adminLoading || !adminPassword}
+                  style={{
+                    flex: 1,
+                    background: adminLoading || !adminPassword ? '#CBD5E1' : '#02C39A',
+                    color: '#FFFFFF',
+                    border: 'none',
+                    borderRadius: '6px',
+                    padding: '9px 0',
+                    fontWeight: 600,
+                    fontSize: '13px',
+                    cursor: adminLoading || !adminPassword ? 'not-allowed' : 'pointer',
+                  }}
+                >
+                  {adminLoading ? '⏳ Signing in…' : 'Sign in'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => { setShowAdminForm(false); setAdminPassword(''); setAdminError(null); }}
+                  style={{
+                    background: 'transparent',
+                    border: '1px solid #64748B',
+                    color: '#A0C4BF',
+                    borderRadius: '6px',
+                    padding: '9px 14px',
+                    cursor: 'pointer',
+                    fontSize: '13px',
+                  }}
+                >
+                  Cancel
+                </button>
+              </div>
+            </form>
+          </div>
+        )}
+      </div>
 
       <p style={{ marginTop: '32px', color: '#64748B', fontSize: '12px', textAlign: 'center' }}>
         Identities authenticated via X.509 certificates issued by the IINoT Fabric CA
