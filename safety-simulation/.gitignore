@@ -1,0 +1,4 @@
+node_modules/
+wallet/
+offchain.db
+*.log

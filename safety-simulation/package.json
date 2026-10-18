@@ -1,0 +1,21 @@
+{
+  "name": "safety-simulation",
+  "version": "1.0.0",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "description": "",
+  "dependencies": {
+    "@grpc/grpc-js": "^1.14.4",
+    "@hyperledger/fabric-gateway": "^1.11.0",
+    "better-sqlite3": "^12.11.1",
+    "fabric-ca-client": "^2.2.20",
+    "fabric-common": "^2.2.20",
+    "mqtt": "^5.15.1",
+    "uuid": "^14.0.0"
+  }
+}
