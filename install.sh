@@ -6,7 +6,7 @@
 #   cd trustguard-iinot && sudo bash install.sh
 #
 # What this does:
-#   1. Checks / installs: Docker, Docker Compose v2, Node.js 18+, jq, curl
+#   1. Checks / installs: Docker, Docker Compose v2, Node.js 20+, jq, curl
 #   2. Downloads Hyperledger Fabric binaries into ./bin/
 #   3. Writes a minimal .env (server paths only — network config via the UI)
 #   4. npm install + Vite build (frontend)
@@ -190,6 +190,14 @@ FABRIC_BIN=${SCRIPT_DIR}/bin
 NETWORK_ROOT=${SCRIPT_DIR}/iinot-network
 CHAINCODE_PATH=${SCRIPT_DIR}/safety-chaincode
 CONFIG_FILE=${SCRIPT_DIR}/iinot-network/config/network-config.json
+
+# Fabric client connection settings
+IINOT_NETWORK_HOME=${SCRIPT_DIR}/iinot-network
+WALLET_DIR=${SCRIPT_DIR}/safety-dashboard/backend/wallet
+CHANNEL_NAME=safetychannel
+CHAINCODE_NAME=safetycontract
+PEER_ENDPOINT=localhost:7051
+PEER_HOST_OVERRIDE=peer0.iinot-industry.com
 EOF
   ok ".env written with server paths."
 fi
@@ -295,6 +303,14 @@ NGINX
   ln -sf "${NGINX_CONF}" /etc/nginx/sites-enabled/trustguard
   rm -f /etc/nginx/sites-enabled/default 2>/dev/null || true
   nginx -t && systemctl reload nginx
+
+  # Allow nginx (www-data) to traverse /root if the repo was cloned there
+  chmod o+x /root 2>/dev/null || true
+  chmod o+x /root/trustguard-iinot 2>/dev/null || true
+  chmod o+x /root/trustguard-iinot/safety-dashboard 2>/dev/null || true
+  chmod o+x /root/trustguard-iinot/safety-dashboard/frontend 2>/dev/null || true
+  chmod -R o+rX "${SCRIPT_DIR}/safety-dashboard/frontend/dist" 2>/dev/null || true
+
   ok "nginx configured — dashboard served on port 80."
 else
   warn "nginx not available. The dashboard frontend won't be served automatically."

@@ -7,13 +7,13 @@ require('dotenv').config();
 const app  = express();
 const PORT = process.env.PORT || 3001;
 
-// ── CORS: allow both local dev and VM ────────────────────────────────────────
-app.use(cors({
-  origin: [
-    'http://localhost:5173',
-    'http://103.35.165.84:5173',
-  ],
-}));
+// ── CORS: allow both local dev and the server's own IP ───────────────────────
+const allowedOrigins = ['http://localhost:5173'];
+if (process.env.SERVER_HOST) {
+  allowedOrigins.push(`http://${process.env.SERVER_HOST}`);
+  allowedOrigins.push(`http://${process.env.SERVER_HOST}:5173`);
+}
+app.use(cors({ origin: allowedOrigins }));
 
 app.use(express.json());
 
