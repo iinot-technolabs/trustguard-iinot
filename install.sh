@@ -43,7 +43,7 @@ exec > >(tee -a "$LOG_FILE") 2>&1
 
 # ─────────────────────────────────────────────────────────────────────────────
 section "TrustGuard IIoT Installer"
-echo -e "  Fabric ${FABRIC_VERSION} · Node 18+ · Docker Compose v2"
+echo -e "  Fabric ${FABRIC_VERSION} · Node 20+ · Docker Compose v2"
 echo -e "  Log: ${LOG_FILE}\n"
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -66,8 +66,8 @@ install_docker() {
 }
 
 install_node() {
-  info "Installing Node.js 18 via NodeSource..."
-  curl -fsSL https://deb.nodesource.com/setup_18.x | bash -
+  info "Installing Node.js 20 via NodeSource..."
+  curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
   apt-get install -y nodejs
   ok "Node.js installed: $(node --version)"
 }
@@ -99,7 +99,7 @@ fi
 # Node.js
 if check_cmd node; then
   NODE_MAJOR=$(node -e "console.log(process.version.split('.')[0].replace('v',''))")
-  [[ "$NODE_MAJOR" -ge 18 ]] || { warn "Node.js $(node --version) < 18; upgrading..."; install_node; }
+  [[ "$NODE_MAJOR" -ge 20 ]] || { warn "Node.js $(node --version) < 20; upgrading..."; install_node; }
 else
   install_node
 fi
@@ -109,6 +109,15 @@ check_cmd jq || install_jq
 
 # curl (should always be present but check)
 check_cmd curl || apt-get install -y curl
+
+# build-essential (needed by native addons like better-sqlite3)
+if ! dpkg -s build-essential &>/dev/null 2>&1; then
+  info "Installing build-essential (required for native Node addons)..."
+  apt-get install -y build-essential
+  ok "build-essential installed."
+else
+  ok "build-essential already installed."
+fi
 
 ok "All system prerequisites satisfied."
 
