@@ -1,0 +1,420 @@
+/* ─── RulesDesignerPage.css ─────────────────────────────────────────────── */
+
+.rd-page {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 24px 20px 60px;
+  font-family: inherit;
+}
+
+/* Back button */
+.rd-back-btn {
+  background: none;
+  border: none;
+  color: #555;
+  font-size: 0.9rem;
+  cursor: pointer;
+  padding: 4px 0 16px;
+  display: block;
+}
+.rd-back-btn:hover { color: #1a1a1a; }
+
+/* Hero */
+.rd-hero {
+  text-align: center;
+  margin-bottom: 28px;
+}
+.rd-hero-title {
+  font-size: 2rem;
+  font-weight: 700;
+  margin: 0 0 8px;
+  color: #111;
+}
+.rd-hero-subtitle {
+  color: #666;
+  margin: 0 0 20px;
+  font-size: 1rem;
+}
+.rd-hero-actions {
+  display: flex;
+  gap: 12px;
+  justify-content: center;
+}
+
+/* Buttons */
+.rd-btn {
+  padding: 9px 20px;
+  border-radius: 6px;
+  font-size: 0.9rem;
+  font-weight: 500;
+  cursor: pointer;
+  border: 1px solid transparent;
+  transition: background 0.15s, box-shadow 0.15s;
+}
+.rd-btn-primary {
+  background: #0f6fec;
+  color: #fff;
+  border-color: #0f6fec;
+}
+.rd-btn-primary:hover { background: #0b5ec9; }
+.rd-btn-secondary {
+  background: #fff;
+  color: #333;
+  border-color: #ccc;
+}
+.rd-btn-secondary:hover { background: #f5f5f5; }
+
+/* Banner */
+.rd-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 16px;
+  border-radius: 6px;
+  margin-bottom: 16px;
+  font-size: 0.9rem;
+}
+.rd-banner--success { background: #ecfdf5; color: #065f46; border: 1px solid #6ee7b7; }
+.rd-banner--error   { background: #fef2f2; color: #991b1b; border: 1px solid #fca5a5; }
+.rd-banner-close {
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 1.1rem;
+  color: inherit;
+  opacity: 0.6;
+  padding: 0 4px;
+}
+.rd-banner-close:hover { opacity: 1; }
+
+/* Notice */
+.rd-notice {
+  background: #eff6ff;
+  border: 1px solid #bfdbfe;
+  border-radius: 6px;
+  padding: 12px 16px;
+  color: #1e40af;
+  font-size: 0.88rem;
+  margin-bottom: 20px;
+}
+
+/* Cards */
+.rd-card {
+  background: #fff;
+  border: 1px solid #e5e7eb;
+  border-radius: 10px;
+  padding: 24px;
+  margin-bottom: 24px;
+  box-shadow: 0 1px 4px rgba(0,0,0,.05);
+}
+
+/* Section header */
+.rd-section-header {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  margin-bottom: 20px;
+}
+.rd-section-icon { font-size: 1.6rem; }
+.rd-section-title {
+  font-size: 1.15rem;
+  font-weight: 600;
+  margin: 0 0 4px;
+  color: #111;
+}
+.rd-section-subtitle {
+  font-size: 0.85rem;
+  color: #666;
+  margin: 0;
+  line-height: 1.4;
+}
+
+/* ─── Event Types Table ──────────────────────────────────────────────────── */
+.rd-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-bottom: 14px;
+  font-size: 0.88rem;
+}
+.rd-table th {
+  text-align: left;
+  padding: 8px 10px;
+  color: #555;
+  font-weight: 600;
+  border-bottom: 2px solid #e5e7eb;
+  white-space: nowrap;
+}
+.rd-table td {
+  padding: 6px 8px;
+  border-bottom: 1px solid #f0f0f0;
+  vertical-align: middle;
+}
+.rd-table tr:hover td { background: #fafafa; }
+
+.rd-hint {
+  font-weight: 400;
+  color: #999;
+  font-size: 0.8em;
+}
+
+.rd-input {
+  border: 1px solid #d1d5db;
+  border-radius: 5px;
+  padding: 5px 8px;
+  font-size: 0.87rem;
+  width: 100%;
+  box-sizing: border-box;
+  outline: none;
+}
+.rd-input:focus { border-color: #3b82f6; box-shadow: 0 0 0 2px rgba(59,130,246,.15); }
+.rd-input--score {
+  width: 56px;
+  text-align: center;
+}
+
+.rd-risk-cell {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.rd-slider {
+  flex: 1;
+  min-width: 80px;
+  accent-color: #0f6fec;
+}
+
+/* Risk badges */
+.rd-risk-badge {
+  display: inline-block;
+  padding: 2px 10px;
+  border-radius: 12px;
+  font-size: 0.78rem;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.risk-critical { background: #fee2e2; color: #991b1b; }
+.risk-high     { background: #ffedd5; color: #9a3412; }
+.risk-medium   { background: #fef9c3; color: #854d0e; }
+.risk-low      { background: #dcfce7; color: #166534; }
+
+.rd-btn-remove {
+  background: none;
+  border: 1px solid #e5e7eb;
+  border-radius: 4px;
+  color: #999;
+  cursor: pointer;
+  font-size: 1rem;
+  line-height: 1;
+  padding: 2px 7px;
+  transition: all 0.15s;
+}
+.rd-btn-remove:hover:not(:disabled) { border-color: #ef4444; color: #ef4444; }
+.rd-btn-remove:disabled { opacity: 0.3; cursor: not-allowed; }
+
+.rd-btn-add {
+  background: #f0f7ff;
+  border: 1px dashed #93c5fd;
+  border-radius: 6px;
+  color: #2563eb;
+  cursor: pointer;
+  font-size: 0.88rem;
+  padding: 7px 16px;
+  width: 100%;
+  transition: background 0.15s;
+}
+.rd-btn-add:hover { background: #dbeafe; }
+
+/* ─── Access Rules Matrix ────────────────────────────────────────────────── */
+.rd-matrix-wrapper {
+  overflow-x: auto;
+  margin-bottom: 12px;
+}
+.rd-matrix {
+  border-collapse: collapse;
+  font-size: 0.85rem;
+  min-width: 600px;
+}
+.rd-matrix th, .rd-matrix td {
+  border: 1px solid #e5e7eb;
+}
+.rd-matrix-fn-header {
+  text-align: left;
+  padding: 10px 14px;
+  background: #f9fafb;
+  color: #555;
+  font-weight: 600;
+  min-width: 220px;
+  white-space: nowrap;
+}
+.rd-matrix-role-header {
+  background: #f9fafb;
+  padding: 6px 8px;
+  min-width: 100px;
+  max-width: 120px;
+}
+.rd-role-header-inner {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  text-align: center;
+}
+.rd-role-org-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  display: block;
+}
+.rd-role-label {
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: #333;
+  line-height: 1.2;
+}
+.rd-role-org {
+  font-size: 0.72rem;
+  color: #888;
+  line-height: 1;
+}
+
+.rd-matrix-fn-cell {
+  padding: 10px 14px;
+  background: #fafafa;
+  min-width: 220px;
+}
+.rd-fn-name {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+.rd-fn-icon { font-size: 1.1rem; flex-shrink: 0; margin-top: 1px; }
+.rd-fn-label {
+  font-weight: 600;
+  color: #111;
+  font-size: 0.88rem;
+  line-height: 1.3;
+}
+.rd-fn-desc {
+  font-size: 0.78rem;
+  color: #888;
+  line-height: 1.3;
+  margin-top: 2px;
+}
+.rd-warn-badge {
+  display: inline-block;
+  margin-top: 4px;
+  font-size: 0.75rem;
+  color: #b45309;
+  background: #fffbeb;
+  border: 1px solid #fcd34d;
+  border-radius: 4px;
+  padding: 1px 7px;
+}
+
+.rd-matrix-cell {
+  text-align: center;
+  padding: 8px;
+  transition: background 0.1s;
+}
+.rd-cell-checked { background: #eff6ff; }
+.rd-cell-disabled { opacity: 0.3; }
+.rd-row-unset td { background: #fffbeb !important; }
+
+.rd-checkbox {
+  width: 16px;
+  height: 16px;
+  cursor: pointer;
+  accent-color: #2563eb;
+}
+.rd-cell-disabled .rd-checkbox { cursor: not-allowed; }
+
+.rd-matrix-legend {
+  display: flex;
+  gap: 16px;
+  flex-wrap: wrap;
+  font-size: 0.8rem;
+  color: #666;
+  margin-top: 8px;
+}
+.rd-legend-item {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+.rd-legend-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  display: inline-block;
+}
+
+.rd-empty {
+  text-align: center;
+  color: #999;
+  padding: 32px;
+  font-size: 0.9rem;
+}
+
+/* Bottom actions */
+.rd-bottom-actions {
+  display: flex;
+  gap: 12px;
+  justify-content: flex-end;
+  margin-top: 8px;
+}
+
+/* ─── JSON Modal ─────────────────────────────────────────────────────────── */
+.rd-modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  padding: 20px;
+}
+.rd-modal {
+  background: #fff;
+  border-radius: 10px;
+  width: 100%;
+  max-width: 680px;
+  max-height: 80vh;
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 20px 60px rgba(0,0,0,.25);
+}
+.rd-modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 20px;
+  border-bottom: 1px solid #e5e7eb;
+}
+.rd-modal-header h3 { margin: 0; font-size: 1rem; }
+.rd-modal-close {
+  background: none;
+  border: none;
+  font-size: 1.3rem;
+  cursor: pointer;
+  color: #888;
+  padding: 0 4px;
+}
+.rd-modal-close:hover { color: #111; }
+.rd-json-preview {
+  flex: 1;
+  overflow: auto;
+  padding: 16px 20px;
+  font-size: 0.8rem;
+  font-family: 'Fira Code', 'Cascadia Code', monospace;
+  background: #f8f8f8;
+  margin: 0;
+  line-height: 1.5;
+}
+.rd-modal-footer {
+  display: flex;
+  gap: 10px;
+  justify-content: flex-end;
+  padding: 14px 20px;
+  border-top: 1px solid #e5e7eb;
+}
