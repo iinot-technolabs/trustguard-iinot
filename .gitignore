@@ -1,0 +1,8 @@
+node_modules/
+.env
+*.pem
+*.key
+iinot-network/bin/
+iinot-network/config/
+iinot-network/organizations/
+iinot-network/channel-artifacts/
