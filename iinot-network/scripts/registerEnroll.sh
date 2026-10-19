@@ -71,8 +71,8 @@ EOF
     { set +x; } 2>/dev/null
 
     # Register org admin
-    local ADMIN_NAME="${ORG_NAME}Admin"
-    local ADMIN_PW="${ORG_NAME}Adminpw"
+    local ADMIN_NAME="$(echo "${ORG_NAME}" | tr -d "/ " | tr "[:upper:]" "[:lower:]")Admin"
+    local ADMIN_PW="$(echo "${ORG_NAME}" | tr -d "/ " | tr "[:upper:]" "[:lower:]")Adminpw"
     infoln "Registering org admin: ${ADMIN_NAME}"
     set -x
     fabric-ca-client register \
@@ -85,7 +85,7 @@ EOF
 
     # Register application-level users defined in config
     # ORG_USERS_<name> is a space-separated list of "username:role" pairs
-    local USERS_VAR="ORG_USERS_${ORG_NAME}"
+    local USERS_VAR="ORG_USERS_$(echo "${ORG_NAME}" | tr -d "/ " | tr "[:upper:]" "[:lower:]")"
     local USERS_STR="${!USERS_VAR}"
     if [ -n "${USERS_STR}" ]; then
         for USER_ENTRY in ${USERS_STR}; do
