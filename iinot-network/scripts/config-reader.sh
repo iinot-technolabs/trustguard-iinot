@@ -52,17 +52,17 @@ _CC_PATH_RAW=$(jq -r '.chaincode.path // "safety-chaincode"' "${CONFIG_FILE}")
 if [[ "${_CC_PATH_RAW}" == /* ]]; then
     export CC_PATH="${_CC_PATH_RAW}"
 else
-    export CC_PATH="${HOME}/fabric/${_CC_PATH_RAW}"
+    export CC_PATH="${HOME}/trustguard-iinot/${_CC_PATH_RAW}"
 fi
 
 # ── Orderer org ───────────────────────────────────────────────
-export ORDERER_DOMAIN=$(jq -r '.ordererOrg.domain // "iinot-safety.com"' "${CONFIG_FILE}")
-export ORDERER_MSPID=$(jq -r '.ordererOrg.mspId // "IINoTOrdererMSP"' "${CONFIG_FILE}")
-export ORDERER_CA_PORT=$(jq -r '.ordererOrg.caPort // 9054' "${CONFIG_FILE}")
-export ORDERER_PORT=$(jq -r '.ordererOrg.port // 7050' "${CONFIG_FILE}")
-export ORDERER_ADMIN_PORT=$(jq -r '.ordererOrg.adminPort // 7053' "${CONFIG_FILE}")
-export ORDERER_CA_NAME=$(jq -r '.ordererOrg.caName // "ca-iinot-orderer"' "${CONFIG_FILE}")
-export ORDERER_CA_SLUG=$(jq -r '.ordererOrg.caSlug // "iinot-orderer"' "${CONFIG_FILE}")
+export ORDERER_DOMAIN=$(jq -r '.orderer.domain // "iinot-safety.com"' "${CONFIG_FILE}")
+export ORDERER_MSPID=$(jq -r '.orderer.mspId // "IINoTOrdererMSP"' "${CONFIG_FILE}")
+export ORDERER_CA_PORT=$(jq -r '.orderer.caPort // 9054' "${CONFIG_FILE}")
+export ORDERER_PORT=$(jq -r '.orderer.port // 7050' "${CONFIG_FILE}")
+export ORDERER_ADMIN_PORT=$(jq -r '.orderer.adminPort // 7053' "${CONFIG_FILE}")
+export ORDERER_CA_NAME=$(jq -r '.orderer.caName // "ca-iinot-orderer"' "${CONFIG_FILE}")
+export ORDERER_CA_SLUG=$(jq -r '.orderer.caSlug // "iinot-orderer"' "${CONFIG_FILE}")
 
 # ── Peer orgs — build parallel arrays ─────────────────────────
 export ORG_COUNT=$(jq '.organizations | length' "${CONFIG_FILE}")
