@@ -12,7 +12,7 @@
 set -e
 cd "$(dirname "$0")/.."  # always run from iinot-network root
 
-export PATH=/root/fabric/bin:$PATH
+export PATH=/root/trustguard-iinot/bin:$PATH
 export FABRIC_CFG_PATH=${PWD}
 
 . scripts/utils.sh

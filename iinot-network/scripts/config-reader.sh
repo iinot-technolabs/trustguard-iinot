@@ -62,7 +62,7 @@ export ORDERER_CA_PORT=$(jq -r '.orderer.caPort // 9054' "${CONFIG_FILE}")
 export ORDERER_PORT=$(jq -r '.orderer.port // 7050' "${CONFIG_FILE}")
 export ORDERER_ADMIN_PORT=$(jq -r '.orderer.adminPort // 7053' "${CONFIG_FILE}")
 export ORDERER_CA_NAME=$(jq -r '.orderer.caName // "ca-iinot-orderer"' "${CONFIG_FILE}")
-export ORDERER_CA_SLUG=$(jq -r '.orderer.caSlug // "iinot-orderer"' "${CONFIG_FILE}")
+export ORDERER_CA_SLUG=$(jq -r '.orderer.caSlug // "orderer"' "${CONFIG_FILE}")
 
 # ── Peer orgs — build parallel arrays ─────────────────────────
 export ORG_COUNT=$(jq '.organizations | length' "${CONFIG_FILE}")
