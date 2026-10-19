@@ -17,7 +17,7 @@ const router  = express.Router();
 const fs      = require('fs');
 const path    = require('path');
 
-const CANONICAL_CONFIG = '/root/fabric/iinot-network/config/network-config.json';
+const CANONICAL_CONFIG = '/root/trustguard-iinot/iinot-network/config/network-config.json';
 
 // GET /api/network-config
 router.get('/', (req, res) => {

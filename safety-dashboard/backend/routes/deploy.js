@@ -9,7 +9,7 @@ const path    = require('path');
 const { spawn } = require('child_process');
 
 // ── Paths ─────────────────────────────────────────────────────
-const NETWORK_ROOT   = '/root/fabric/iinot-network';
+const NETWORK_ROOT   = '/root/trustguard-iinot/iinot-network';
 const CONFIG_FILE    = path.join(NETWORK_ROOT, 'config/network-config.json');
 const NETWORK_SCRIPT = path.join(NETWORK_ROOT, 'scripts/network.sh');
 // generateConfigs.js lives in the dashboard backend's lib/ folder
@@ -102,7 +102,7 @@ router.post('/', async (req, res) => {
 
   const proc = spawn('bash', [NETWORK_SCRIPT, mode], {
     cwd: NETWORK_ROOT,
-    env: { ...process.env, HOME: '/root', PATH: `/root/fabric/bin:${process.env.PATH}` },
+    env: { ...process.env, HOME: '/root', PATH: `/root/trustguard-iinot/iinot-network/bin:${process.env.PATH}` },
   });
 
   deployState.pid = proc.pid;
