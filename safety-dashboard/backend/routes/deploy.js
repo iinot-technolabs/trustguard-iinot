@@ -74,7 +74,7 @@ router.post('/', async (req, res) => {
   let genError = null;
   try {
     await new Promise((resolve, reject) => {
-      const gen = spawn('node', [GEN_CONFIGS_SCRIPT, CONFIG_FILE, NETWORK_ROOT], {
+      const gen = spawn(process.execPath, [GEN_CONFIGS_SCRIPT, CONFIG_FILE, NETWORK_ROOT], {
         cwd: NETWORK_ROOT,
         env: { ...process.env },
       });
@@ -102,7 +102,7 @@ router.post('/', async (req, res) => {
 
   const proc = spawn('bash', [NETWORK_SCRIPT, mode], {
     cwd: NETWORK_ROOT,
-    env: { ...process.env, HOME: '/root', PATH: `/root/trustguard-iinot/iinot-network/bin:${process.env.PATH}` },
+    env: { ...process.env, HOME: '/root', PATH: `/root/trustguard-iinot/bin:${process.env.PATH}` },
   });
 
   deployState.pid = proc.pid;
