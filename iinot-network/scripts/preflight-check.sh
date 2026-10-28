@@ -6,7 +6,7 @@
 # =============================================================================
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"   # install root (.env, bin/)
 ENV_FILE="${SCRIPT_DIR}/.env"
 [[ -f "${ENV_FILE}" ]] && source "${ENV_FILE}" || { echo "No .env found. Run install.sh first."; exit 1; }
 

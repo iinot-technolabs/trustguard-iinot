@@ -1,0 +1,18 @@
+# Template — install.sh replaces @TG_HOME@ and @NODE@ and installs it as /etc/systemd/system/trustguard-gateway.service
+[Unit]
+Description=TrustGuard IIoT LoRaWAN -> Fabric gateway
+After=network-online.target docker.service trustguard-backend.service
+Wants=network-online.target
+Requires=docker.service
+
+[Service]
+WorkingDirectory=@TG_HOME@/safety-simulation
+Environment=TG_HOME=@TG_HOME@
+EnvironmentFile=-@TG_HOME@/config/client/gateway.env
+ExecStart=@NODE@ @TG_HOME@/safety-simulation/ttnGateway.js
+Restart=always
+RestartSec=5
+NoNewPrivileges=yes
+
+[Install]
+WantedBy=multi-user.target

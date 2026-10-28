@@ -16,3 +16,10 @@ bin/
 install.log
 *.tar.gz
 .tg-backup/
+
+# Per-client settings and runtime data (created by install.sh / the services)
+config/client/
+safety-simulation/escalation/.env
+safety-simulation/offchain.db*
+safety-dashboard/backend/users.json
+safety-dashboard/backend/data/

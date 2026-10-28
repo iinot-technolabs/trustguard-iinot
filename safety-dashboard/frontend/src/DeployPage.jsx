@@ -5,12 +5,14 @@ import './DeployPage.css';
 
 // Patterns matched against actual network.sh infoln/successln output
 const DEPLOY_STEPS = [
-  { id: 'cas',       label: 'Start CAs',           patterns: ['starting ca containers', 'waiting for cas', 'ca.iinot'] },
-  { id: 'crypto',    label: 'Identities',           patterns: ['generating cryptographic', 'registerenroll', 'createiinot', 'all identities generated'] },
-  { id: 'network',   label: 'Peers & Orderer',      patterns: ['starting peer and orderer', 'peer0.iinot', 'orderer.iinot', 'network is up'] },
-  { id: 'channel',   label: 'Channel',              patterns: ['generating genesis', 'configtxgen', 'iinot-safety-channel', 'channel created', 'anchor peer'] },
-  { id: 'chaincode', label: 'Chaincode',            patterns: ['packaging chaincode', 'installing chaincode', 'peer lifecycle', 'approved', 'committed', 'safetycc'] },
-  { id: 'done',      label: 'Complete',             patterns: ['deployment complete', 'network is ready', 'successln', 'all done'] },
+  { id: 'validate',  label: 'Validate',         patterns: ['written: configtx.yaml', 'secrets present', 'config loaded'] },
+  { id: 'cas',       label: 'Start CAs',        patterns: ['starting cas'] },
+  { id: 'crypto',    label: 'Identities',       patterns: ['registering peer0', 'identities enrolled', 'enrolling peer0'] },
+  { id: 'network',   label: 'Peers & Orderer',  patterns: ['starting orderer and peers', 'network is up'] },
+  { id: 'channel',   label: 'Channel',          patterns: ['creating genesis block', 'joining ', "channel '"] },
+  { id: 'chaincode', label: 'Chaincode',        patterns: ['packaging ', 'installing ', 'approving for', 'committing ', 'committed definition matches'] },
+  { id: 'wallet',    label: 'Wallet',           patterns: ['wallet:', 'app identities in'] },
+  { id: 'done',      label: 'Complete',         patterns: ['deployment complete', 'network.sh all finished'] },
 ];
 
 function detectStep(line) {
@@ -84,7 +86,9 @@ export default function DeployPage({ networkConfig, onBack }) {
       });
       if (!res.ok) {
         const err = await res.json().catch(() => ({ error: res.statusText }));
-        setLogs(l => [...l, { ts: Date.now(), stream: 'stderr', line: `[error] ${err.error}` }]);
+        const lines = err.problems ? ['[error] The network config is not valid:', ...err.problems.map(p => `  - ${p}`)]
+                                   : [`[error] ${err.error}`];
+        setLogs(l => [...l, ...lines.map(line => ({ ts: Date.now(), stream: 'stderr', line }))]);
         setStatus('error');
         return;
       }
@@ -251,12 +255,12 @@ export default function DeployPage({ networkConfig, onBack }) {
           {networkConfig
             ? <>
                 <span className="dp-ai-item">
-                  <strong>{networkConfig.organizations?.length ?? 0}</strong> orgs
+                  <strong>{(networkConfig.organizations || []).filter(o => o.enabled !== false).length}</strong> orgs
                 </span>
                 <span className="dp-ai-sep">·</span>
-                <span className="dp-ai-item">{networkConfig.channelName}</span>
+                <span className="dp-ai-item">{networkConfig.network?.channel || networkConfig.channelName}</span>
                 <span className="dp-ai-sep">·</span>
-                <span className="dp-ai-item">{networkConfig.networkName}</span>
+                <span className="dp-ai-item">{networkConfig.network?.name || networkConfig.networkName}</span>
               </>
             : <span className="dp-ai-warn">⚠ No network config — run Network Designer first</span>
           }

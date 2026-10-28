@@ -1,171 +1,114 @@
-import { useState } from 'react'
+import { useState, useEffect, useRef } from 'react'
 
-// Admin landing page — shown when session.role === 'admin'
-// Provides quick links to the three bootstrap steps:
-//   1. Configure Network  →  parent sets view = 'configure'
-//   2. Deploy Network     →  parent sets view = 'deploy'
-//   3. Enroll Identities  →  inline action via backend (future)
+// Admin landing page (role "admin": no Fabric identity, manages the network).
+//   1. Network Designer  → organisations, identities, insurer toggle, endorsement
+//   2. Deploy            → builds the network and enrols the app identities into the wallet
+//   3. Enroll identities → re-enrol the wallet without redeploying (POST /api/deploy/enroll)
+//   4. Dashboard users   → created on the server with scripts/manageUsers.js
 
-export default function AdminView({ session, onNavigate }) {
-  const [enrollStatus, setEnrollStatus] = useState(null) // null | 'running' | 'done' | 'error'
-  const [enrollLog,    setEnrollLog]    = useState([])
+export default function AdminView({ onNavigate }) {
+  const [net, setNet]       = useState(null)       // /api/network-info, null = not deployed yet
+  const [state, setState]   = useState('idle')     // idle | running | done | error
+  const [log, setLog]       = useState([])
+  const esRef = useRef(null)
 
-  async function handleEnroll() {
-    setEnrollStatus('running')
-    setEnrollLog(['Starting identity enrollment…'])
-    try {
-      const res = await fetch('/api/deploy/enroll', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${session.token}`,
-        },
-      })
-      const data = await res.json()
-      if (data.success) {
-        setEnrollStatus('done')
-        setEnrollLog(prev => [...prev, '✓ Identities enrolled successfully.'])
-      } else {
-        setEnrollStatus('error')
-        setEnrollLog(prev => [...prev, `✗ ${data.error || 'Enrollment failed'}`])
-      }
-    } catch (err) {
-      setEnrollStatus('error')
-      setEnrollLog(prev => [...prev, `✗ ${err.message}`])
+  useEffect(() => {
+    fetch('/api/network-info').then(r => r.ok ? r.json() : null).then(j => setNet(j?.success ? j : null)).catch(() => {})
+    return () => esRef.current?.close()
+  }, [])
+
+  async function enroll() {
+    setState('running'); setLog(['Enrolling app identities…'])
+    const res = await fetch('/api/deploy/enroll', { method: 'POST' }).catch(e => ({ ok: false, json: async () => ({ error: e.message }) }))
+    if (!res.ok) {
+      const j = await res.json().catch(() => ({}))
+      setState('error'); setLog(l => [...l, `✗ ${j.error || (j.problems || []).join('; ') || 'request failed'}`])
+      return
     }
+    const es = new EventSource('/api/deploy/stream')
+    esRef.current = es
+    es.addEventListener('log', e => {
+      const { line } = JSON.parse(e.data)
+      if (/wallet:|app identities|ERROR|error/i.test(line)) setLog(l => [...l, line])
+    })
+    es.addEventListener('done', e => {
+      const { exitCode } = JSON.parse(e.data)
+      setState(exitCode === 0 ? 'done' : 'error')
+      setLog(l => [...l, exitCode === 0 ? '✓ Identities enrolled.' : `✗ Enrolment failed (exit ${exitCode}); see the Deploy log.`])
+      es.close()
+    })
   }
 
-  const cardStyle = (color) => ({
-    background: '#FFFFFF',
-    border: `2px solid ${color}`,
-    borderRadius: '12px',
-    padding: '28px 24px',
-    width: '260px',
-    display: 'flex',
-    flexDirection: 'column',
-    gap: '10px',
+  const card = color => ({
+    background: '#FFFFFF', border: `2px solid ${color}`, borderRadius: '12px', padding: '24px 20px',
+    width: '250px', display: 'flex', flexDirection: 'column', gap: '10px',
   })
-
-  const btnStyle = (color, disabled) => ({
-    marginTop: 'auto',
-    background: disabled ? '#CBD5E1' : color,
-    color: '#FFFFFF',
-    border: 'none',
-    borderRadius: '8px',
-    padding: '10px 0',
-    fontWeight: 600,
-    fontSize: '14px',
-    cursor: disabled ? 'not-allowed' : 'pointer',
-    transition: 'opacity 0.15s',
+  const btn = (color, disabled) => ({
+    marginTop: 'auto', background: disabled ? '#CBD5E1' : color, color: '#FFFFFF', border: 'none',
+    borderRadius: '8px', padding: '10px 0', fontWeight: 600, fontSize: '14px', cursor: disabled ? 'not-allowed' : 'pointer',
   })
+  const code = { background: '#F1F5F9', padding: '1px 5px', borderRadius: '4px', fontSize: '12px' }
 
   return (
-    <div style={{ padding: '40px 32px', maxWidth: '960px', margin: '0 auto' }}>
+    <div style={{ padding: '40px 32px', maxWidth: '1120px', margin: '0 auto' }}>
+      <h2 style={{ margin: '0 0 6px', fontSize: '22px', color: '#014F54', fontWeight: 700 }}>Administration</h2>
+      <p style={{ margin: '0 0 24px', color: '#64748B', fontSize: '14px' }}>
+        {net
+          ? <>Deployed: <strong>{net.network}</strong> · channel <code style={code}>{net.channel}</code> · {net.chaincode} {net.chaincodeVersion} · policy <code style={code}>{net.endorsementPolicy}</code> · {net.orgs.map(o => o.label).join(', ')}</>
+          : 'No network deployed yet. Design it, then deploy it.'}
+      </p>
 
-      {/* Header */}
-      <div style={{ marginBottom: '32px' }}>
-        <h2 style={{ margin: '0 0 6px', fontSize: '22px', color: '#014F54', fontWeight: 700 }}>
-          🔧 Admin — Network Bootstrap
-        </h2>
-        <p style={{ margin: 0, color: '#64748B', fontSize: '14px' }}>
-          Complete these steps in order before any other identities can log in.
-        </p>
+      <div style={{ display: 'flex', gap: '18px', flexWrap: 'wrap' }}>
+        <div style={card('#028090')}>
+          <div style={{ fontWeight: 700, fontSize: '16px', color: '#1E293B' }}>1 · Design the network</div>
+          <div style={{ fontSize: '13px', color: '#64748B', flexGrow: 1 }}>
+            Organisations, domains, ports, channel, identities and their roles, the insurer toggle and who must endorse.
+          </div>
+          <button style={btn('#028090')} onClick={() => onNavigate('configure')}>Open Network Designer →</button>
+        </div>
+
+        <div style={card('#00A896')}>
+          <div style={{ fontWeight: 700, fontSize: '16px', color: '#1E293B' }}>2 · Deploy</div>
+          <div style={{ fontSize: '13px', color: '#64748B', flexGrow: 1 }}>
+            Starts the CAs, orderer and peers, creates the channel, commits the chaincode with the endorsement policy
+            and enrols the identities. Fresh installs only.
+          </div>
+          <button style={btn('#00A896')} onClick={() => onNavigate('deploy')}>Open Deploy →</button>
+        </div>
+
+        <div style={card('#0077B6')}>
+          <div style={{ fontWeight: 700, fontSize: '16px', color: '#1E293B' }}>3 · Enroll identities</div>
+          <div style={{ fontSize: '13px', color: '#64748B', flexGrow: 1 }}>
+            Re-enrols the network's app identities into the server wallet{net ? '' : ' (needs a deployed network)'}.
+            Deploy already does this; use it if the wallet was cleared.
+          </div>
+          <button style={btn('#0077B6', state === 'running' || !net)} disabled={state === 'running' || !net} onClick={enroll}>
+            {state === 'running' ? 'Enrolling…' : state === 'done' ? '✓ Done — enrol again' : 'Enroll identities'}
+          </button>
+        </div>
+
+        <div style={card('#64748B')}>
+          <div style={{ fontWeight: 700, fontSize: '16px', color: '#1E293B' }}>4 · Dashboard users</div>
+          <div style={{ fontSize: '13px', color: '#64748B', flexGrow: 1 }}>
+            People log in with their own username and password. On the server, in <code style={code}>safety-dashboard/backend</code>:
+            <div style={{ marginTop: '6px', fontFamily: 'monospace', fontSize: '12px', lineHeight: 1.6 }}>
+              node scripts/manageUsers.js add <i>name</i> supervisor<br />
+              … auditor · claims-reviewer · admin<br />
+              node scripts/manageUsers.js list
+            </div>
+          </div>
+        </div>
       </div>
 
-      {/* Step cards */}
-      <div style={{ display: 'flex', gap: '20px', flexWrap: 'wrap' }}>
-
-        {/* Step 1 — Configure */}
-        <div style={cardStyle('#028090')}>
-          <div style={{ fontSize: '32px' }}>⚙️</div>
-          <div style={{ fontWeight: 700, fontSize: '16px', color: '#1E293B' }}>
-            1 · Configure Network
-          </div>
-          <div style={{ fontSize: '13px', color: '#64748B', flexGrow: 1 }}>
-            Define organisations, domains, ports, channel name, and chaincode settings.
-          </div>
-          <button
-            style={btnStyle('#028090', false)}
-            onClick={() => onNavigate('configure')}
-          >
-            Open Network Designer →
-          </button>
-        </div>
-
-        {/* Step 2 — Deploy */}
-        <div style={cardStyle('#00A896')}>
-          <div style={{ fontSize: '32px' }}>🚀</div>
-          <div style={{ fontWeight: 700, fontSize: '16px', color: '#1E293B' }}>
-            2 · Deploy Network
-          </div>
-          <div style={{ fontSize: '13px', color: '#64748B', flexGrow: 1 }}>
-            Start all Fabric containers, create the channel, and install chaincode.
-            Watch the live log to confirm success.
-          </div>
-          <button
-            style={btnStyle('#00A896', false)}
-            onClick={() => onNavigate('deploy')}
-          >
-            Open Deploy →
-          </button>
-        </div>
-
-        {/* Step 3 — Enroll */}
-        <div style={cardStyle('#0077B6')}>
-          <div style={{ fontSize: '32px' }}>🪪</div>
-          <div style={{ fontWeight: 700, fontSize: '16px', color: '#1E293B' }}>
-            3 · Enroll Identities
-          </div>
-          <div style={{ fontSize: '13px', color: '#64748B', flexGrow: 1 }}>
-            Register and enroll <code>supervisor1</code>, <code>auditor1</code>, and{' '}
-            <code>gateway1</code> with the Fabric CA so they can log in.
-          </div>
-          <button
-            style={btnStyle('#0077B6', enrollStatus === 'running')}
-            onClick={handleEnroll}
-            disabled={enrollStatus === 'running'}
-          >
-            {enrollStatus === 'running' ? '⏳ Enrolling…'
-              : enrollStatus === 'done'    ? '✓ Done — Re-enroll'
-              : 'Enroll Identities'}
-          </button>
-        </div>
-
-      </div>
-
-      {/* Enroll log */}
-      {enrollLog.length > 0 && (
+      {log.length > 0 && (
         <div style={{
-          marginTop: '28px',
-          background: '#0F1C1C',
-          borderRadius: '8px',
-          padding: '16px 20px',
-          fontFamily: 'monospace',
-          fontSize: '13px',
-          color: enrollStatus === 'error' ? '#FF6B6B' : '#02C39A',
-          maxHeight: '200px',
-          overflowY: 'auto',
+          marginTop: '24px', background: '#0F1C1C', borderRadius: '8px', padding: '14px 18px',
+          fontFamily: 'monospace', fontSize: '13px', color: state === 'error' ? '#FF6B6B' : '#02C39A',
+          maxHeight: '220px', overflowY: 'auto',
         }}>
-          {enrollLog.map((line, i) => <div key={i}>{line}</div>)}
+          {log.map((l, i) => <div key={i}>{l}</div>)}
         </div>
       )}
-
-      {/* Info footer */}
-      <div style={{
-        marginTop: '40px',
-        padding: '16px 20px',
-        background: '#EAF6F4',
-        borderRadius: '8px',
-        fontSize: '13px',
-        color: '#014F54',
-        lineHeight: 1.6,
-      }}>
-        <strong>Note:</strong> The Admin role is purely a bootstrap tool — it has no dependency
-        on Fabric certificates or enrolled identities. Once network is deployed and identities
-        are enrolled, Supervisor, Auditor, and Gateway users can log in using their own identities.
-        The Admin password is set via <code>ADMIN_PASSWORD</code> in the server's <code>.env</code> file.
-      </div>
-
     </div>
   )
 }

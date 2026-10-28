@@ -1,20 +1,28 @@
 import { useState, useEffect, useCallback } from 'react'
 import axios from 'axios'
+import SiteConditions from './SiteConditions'
+import { riskDrivers } from './SupervisorView'
+import ComplianceCard from './ComplianceCard'
+import Form18Modal, { StatusBadge } from './Form18'
+import { useNetworkInfo, orgLabel } from './networkInfo'
 
 const API = '/api'
 
 const STATUS_COLORS = {
   TRIGGERED:    { bg: '#FBEAE8', text: '#C0392B' },
+  ESCALATED:    { bg: '#F3E8FF', text: '#7E22CE' },
   ACKNOWLEDGED: { bg: '#FFF8E6', text: '#B7791F' },
   RESOLVED:     { bg: '#EAF6F4', text: '#028090' }
 }
 
 export default function AuditorView({ session }) {
+  const net = useNetworkInfo()
   const [incidents, setIncidents] = useState([])
   const [selected,  setSelected]  = useState(null)
   const [history,   setHistory]   = useState(null)
   const [loading,   setLoading]   = useState(true)
   const [filter,    setFilter]    = useState('ALL')
+  const [form18,    setForm18]    = useState(null)
 
   const headers = { 'x-identity': session.identity }
 
@@ -42,6 +50,10 @@ export default function AuditorView({ session }) {
   return (
     <div style={{ padding: '24px', maxWidth: '1200px', margin: '0 auto' }}>
 
+      <SiteConditions />
+
+      <ComplianceCard onOpenIncident={id => { const i = incidents.find(x => x.incidentId === id); if (i) loadHistory(i) }} />
+
       <div style={{
         background: '#014F54', borderRadius: '12px',
         padding: '20px 24px', marginBottom: '24px',
@@ -52,7 +64,7 @@ export default function AuditorView({ session }) {
             Regulatory Audit Dashboard
           </h2>
           <p style={{ color: '#EAF6F4', margin: 0, fontSize: '13px' }}>
-            Read-only · IINoT Regulator · All data from the immutable ledger
+            Read-only · {orgLabel(net, 'regulator', 'Regulator')} · All data from the immutable ledger
           </p>
         </div>
         <div style={{
@@ -65,7 +77,7 @@ export default function AuditorView({ session }) {
       </div>
 
       <div style={{ display: 'flex', gap: '8px', marginBottom: '16px' }}>
-        {['ALL', 'TRIGGERED', 'ACKNOWLEDGED', 'RESOLVED'].map(f => (
+        {['ALL', 'TRIGGERED', 'ESCALATED', 'ACKNOWLEDGED', 'RESOLVED'].map(f => (
           <button
             key={f}
             onClick={() => setFilter(f)}
@@ -96,7 +108,7 @@ export default function AuditorView({ session }) {
             }}>
               <thead>
                 <tr style={{ background: '#F8FAFC' }}>
-                  {['Incident ID','Device','Type','Risk','Status','Timestamp','Actions'].map(h => (
+                  {['Incident ID','Device','Type','Risk','Status','Outcome','Form 18','Timestamp','Actions'].map(h => (
                     <th key={h} style={{
                       padding: '10px 14px', textAlign: 'left',
                       color: '#64748B', fontWeight: 600,
@@ -121,13 +133,22 @@ export default function AuditorView({ session }) {
                       <td style={{ padding: '10px 14px', fontWeight: 600, color: '#1E293B' }}>
                         {inc.eventType}
                       </td>
-                      <td style={{ padding: '10px 14px', color: '#1E293B' }}>{inc.riskScore}</td>
+                      <td title={riskDrivers(inc) || 'Fixed score (before risk model v1)'} style={{
+                        padding: '10px 14px', color: '#1E293B',
+                        textDecoration: inc.risk ? 'underline dotted' : 'none', cursor: inc.risk ? 'help' : 'default'
+                      }}>{inc.riskScore}</td>
                       <td style={{ padding: '10px 14px' }}>
                         <span style={{
                           background: sc.bg, color: sc.text,
                           borderRadius: '10px', padding: '2px 8px',
                           fontSize: '11px', fontWeight: 600
-                        }}>{inc.status}</span>
+                        }}>{inc.status}{inc.escalationLevel && inc.status === 'ESCALATED' ? ` L${inc.escalationLevel}` : ''}</span>
+                      </td>
+                      <td style={{ padding: '10px 14px', color: '#64748B', fontSize: '12px' }}>
+                        {{ GENUINE: 'Genuine', NEAR_MISS: 'Near miss', FALSE_ALARM: 'False alarm' }[inc.outcome] || '—'}
+                      </td>
+                      <td style={{ padding: '10px 14px' }}>
+                        <StatusBadge inc={inc} onClick={(inc.statutoryReports || []).length ? () => setForm18(inc.incidentId) : undefined} />
                       </td>
                       <td style={{ padding: '10px 14px', color: '#64748B', fontSize: '12px' }}>
                         {new Date(inc.timestamp).toLocaleString()}
@@ -197,6 +218,7 @@ export default function AuditorView({ session }) {
           </div>
         )}
       </div>
+      {form18 && <Form18Modal incidentId={form18} readOnly onClose={() => setForm18(null)} />}
     </div>
   )
 }

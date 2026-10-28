@@ -19,6 +19,7 @@ const path     = require('path');
 const Database = require('better-sqlite3');
 const grpc     = require('@grpc/grpc-js');
 const { connect, signers } = require('@hyperledger/fabric-gateway');
+const tg = require('../common/tgnet');   // network, identities, paths from the deployed config
 
 // ── Config ────────────────────────────────────────────────────────────────────
 const SCENARIO    = process.argv.includes('--scenario')
@@ -28,18 +29,7 @@ const BEACON_COUNTS = process.argv.includes('--beacons')
   ? [parseInt(process.argv[process.argv.indexOf('--beacons') + 1])]
   : [1, 3, 5];
 
-// Paths — work on both laptop (HOME=/home/upp_kishore) and VM (HOME=/root)
-const HOME         = process.env.HOME;
-const NET_HOME     = path.join(HOME, 'fabric', 'iinot-network');
-const WALLET_DIR   = path.join(HOME, 'fabric', 'safety-simulation', 'wallet');
-const DB_PATH      = path.join(HOME, 'fabric', 'safety-simulation', 'offchain.db');
-const TLS_CERT     = path.join(NET_HOME, 'organizations', 'peerOrganizations',
-                      'iinot-industry.com', 'peers',
-                      'peer0.iinot-industry.com', 'tls', 'ca.crt');
-const CHANNEL      = 'iinot-safety-channel';
-const CHAINCODE    = 'safetycc';
-const PEER_ADDR    = 'localhost:7051';
-const PEER_HOST    = 'peer0.iinot-industry.com';
+const DB_PATH    = tg.offchainDb();
 
 const WAKE_REASON_MAP = {
   2: { eventType: 'FALL',       riskScore: '85' },
@@ -81,28 +71,12 @@ try {
 
 // ── Fabric connection ─────────────────────────────────────────────────────────
 async function getFabricConnection() {
-  const credentials = fs.readFileSync(path.join(WALLET_DIR, 'gateway1', 'cert.pem'));
-  const privateKey  = crypto.createPrivateKey(
-    fs.readFileSync(path.join(WALLET_DIR, 'gateway1', 'key.pem'))
-  );
-  const tlsRootCert = fs.readFileSync(TLS_CERT);
-
-  const grpcClient = new grpc.Client(
-    PEER_ADDR,
-    grpc.credentials.createSsl(tlsRootCert),
-    { 'grpc.ssl_target_name_override': PEER_HOST }
-  );
-
-  const gateway = connect({
-    client:   grpcClient,
-    identity: { mspId: 'IINoTIndustryMSP', credentials },
-    signer:   signers.newPrivateKeySigner(privateKey),
-  });
+  const { gateway, client: grpcClient } = tg.connect(tg.identityForRole('gateway'), { grpc, connect, signers });
 
   return {
     gateway,
     grpcClient,
-    contract: gateway.getNetwork(CHANNEL).getContract(CHAINCODE)
+    contract: gateway.getNetwork(tg.load().network.channel).getContract(tg.load().chaincode.name)
   };
 }
 
@@ -245,7 +219,7 @@ async function main() {
   console.log(`Scenario : ${SCENARIO}`);
   console.log(`Beacons  : ${BEACON_COUNTS.join(', ')}`);
   console.log(`DB       : ${DB_PATH}`);
-  console.log(`Network  : ${NET_HOME}`);
+  console.log(`Network  : ${tg.load().network.name} (${tg.load().network.channel})`);
 
   if (process.argv.includes('--summary')) {
     printSummary();

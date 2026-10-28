@@ -1,46 +1,58 @@
 'use strict';
-
+// POST /api/auth/login   { username, password }  → { success, token, username, role, identity, mspId, expiresAt }
+// GET  /api/auth/me      (Bearer token)          → current session info
 const express = require('express');
 const router  = express.Router();
-const fs      = require('fs');
-const path    = require('path');
-require('dotenv').config();
+const auth    = require('../lib/auth');
+const tg      = require('../../../common/tgnet');
 
-const WALLET_DIR = process.env.WALLET_DIR;
+router.post('/login', (req, res) => {
+  const ip = req.ip;
+  const { username, password } = req.body || {};
+  const key = `${ip}|${String(username || '').toLowerCase()}`;
 
-const IDENTITY_ROLES = {
-    'gateway1':    { role: 'gateway',    mspId: 'IINoTIndustryMSP' },
-    'supervisor1': { role: 'supervisor', mspId: 'IINoTIndustryMSP' },
-    'auditor1':    { role: 'auditor',    mspId: 'IINoTRegulatorMSP' }
-};
+  if (auth.tooManyAttempts(key)) {
+    console.warn(`[auth] LOCKED login attempts from ${ip}`);
+    return res.status(429).json({ success: false, error: 'Too many failed attempts. Try again in 15 minutes.' });
+  }
+  if (!username || !password) {
+    return res.status(400).json({ success: false, error: 'Username and password are required' });
+  }
 
-router.post('/login', async (req, res) => {
-    try {
-        const { identity } = req.body;
+  const user = auth.verifyUser(String(username), String(password));
+  if (!user) {
+    auth.recordFailure(key);
+    console.warn(`[auth] FAIL login '${username}' from ${ip}`);
+    return res.status(401).json({ success: false, error: 'Invalid username or password' });
+  }
 
-        if (!identity || !IDENTITY_ROLES[identity]) {
-            return res.status(400).json({
-                success: false,
-                error: 'Unknown identity. Use: gateway1, supervisor1, or auditor1'
-            });
-        }
-
-        const certPath = path.join(WALLET_DIR, identity, 'cert.pem');
-        if (!fs.existsSync(certPath)) {
-            return res.status(401).json({
-                success: false,
-                error: `Identity '${identity}' not enrolled. Run enrollIdentities.js first.`
-            });
-        }
-
-        const { role, mspId } = IDENTITY_ROLES[identity];
-        res.json({
-            success: true, identity, role, mspId,
-            enrolledAt: fs.statSync(certPath).mtime
-        });
-    } catch (err) {
-        res.status(500).json({ success: false, error: err.message });
+  // Fabric-backed roles need an identity in the deployed network and in the wallet.
+  const map = auth.ROLE_IDENTITIES[user.role];
+  if (user.role !== 'admin') {
+    if (!map.identity) {
+      return res.status(503).json({ success: false,
+        error: `The deployed network has no identity with role '${user.role}'. Ask the administrator to add one in the Network Designer.` });
     }
+    const w = tg.walletStatus(tg.identity(map.identity));
+    if (!w.ok) {
+      return res.status(503).json({ success: false,
+        error: `Fabric identity '${map.identity}' is not enrolled on this server yet. Ask the administrator to run Enroll Identities.` });
+    }
+  }
+
+  auth.clearFailures(key);
+  const { token, payload } = auth.signToken(user);
+  console.log(`[auth] OK login '${user.username}' role=${user.role} identity=${map.identity || '-'} from ${ip}`);
+  res.json({
+    success: true, token,
+    username: user.username, role: user.role,
+    identity: payload.identity, mspId: payload.mspId,
+    expiresAt: new Date(payload.exp).toISOString(),
+  });
+});
+
+router.get('/me', auth.requireAuth(), (req, res) => {
+  res.json({ success: true, ...req.identity });
 });
 
 module.exports = router;

@@ -1,0 +1,24 @@
+// node test/escalation.test.js — escalation policy checks (TG-016)
+const assert = require('assert');
+const policy = require('../escalation/policy.json');
+const { nextStep, isNewAlert } = require('../escalation/policy');
+const T0 = Date.parse('2026-10-26T13:00:00Z'), since = T0 - 3600e3, min = m => T0 + m * 60000;
+const inc = (o = {}) => ({ incidentId: 'CS-1', status: 'TRIGGERED', timestamp: new Date(T0).toISOString(), riskScore: '95', ...o });
+let n = 0; const eq = (name, got, want) => { assert.deepStrictEqual(got, want, name); n++; console.log('  ✓', name); };
+eq('4 min old: no escalation', nextStep(inc(), min(4), policy, since), null);
+eq('5 min old: level 1', nextStep(inc(), min(5), policy, since)?.level, 1);
+eq('20 min old, still level 0: only level 1 (one step at a time)', nextStep(inc(), min(20), policy, since)?.level, 1);
+eq('20 min old at level 1: level 2', nextStep(inc({ status: 'ESCALATED', escalationLevel: 1 }), min(20), policy, since)?.level, 2);
+eq('level 2 at 3 h: wait for 4 h', nextStep(inc({ status: 'ESCALATED', escalationLevel: 2 }), min(180), policy, since), null);
+eq('level 2 at 4 h, risk 95: level 3 (regulator)', nextStep(inc({ status: 'ESCALATED', escalationLevel: 2 }), min(240), policy, since)?.level, 3);
+eq('level 2 at 4 h, risk 70: stays at 2', nextStep(inc({ status: 'ESCALATED', escalationLevel: 2, riskScore: '70' }), min(240), policy, since), null);
+eq('level 3: nothing further', nextStep(inc({ status: 'ESCALATED', escalationLevel: 3 }), min(600), policy, since), null);
+eq('ACKNOWLEDGED: never escalated', nextStep(inc({ status: 'ACKNOWLEDGED' }), min(30), policy, since), null);
+eq('RESOLVED: never escalated', nextStep(inc({ status: 'RESOLVED' }), min(30), policy, since), null);
+eq('older than service start: ignored (the 220 old test incidents)', nextStep(inc(), min(30), policy, T0 + 1), null);
+eq('older than 24 h: ignored', nextStep(inc(), min(25 * 60), policy, since), null);
+eq('bad timestamp: ignored', nextStep(inc({ timestamp: 'x' }), min(30), policy, since), null);
+eq('new alert within 10 min', isNewAlert(inc(), min(2), policy, since), true);
+eq('no new alert after 10 min', isNewAlert(inc(), min(11), policy, since), false);
+eq('no new alert once acknowledged', isNewAlert(inc({ status: 'ACKNOWLEDGED' }), min(1), policy, since), false);
+console.log(`escalation policy: ${n} checks passed`);

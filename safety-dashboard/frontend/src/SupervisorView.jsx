@@ -1,15 +1,41 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import axios from 'axios'
+import SiteConditions from './SiteConditions'
+import AssignmentsPanel from './AssignmentsPanel'
+import ComplianceCard from './ComplianceCard'
+import StatutoryPanel from './StatutoryPanel'
 
 const API = '/api'
 
 const STATUS_COLORS = {
   TRIGGERED:    { bg: '#FBEAE8', text: '#C0392B', border: '#C0392B' },
+  ESCALATED:    { bg: '#F3E8FF', text: '#7E22CE', border: '#9333EA' },
   ACKNOWLEDGED: { bg: '#FFF8E6', text: '#B7791F', border: '#D69E2E' },
   RESOLVED:     { bg: '#EAF6F4', text: '#028090', border: '#02C39A' }
 }
 
 const EVENT_ICONS = { SOS: '🆘', FALL: '⬇️', INACTIVITY: '💤' }
+
+// Outcome tag recorded on resolve (chaincode 1.1) — training label for the AI risk score
+const OUTCOMES = [
+  { value: 'GENUINE',     label: 'Genuine emergency' },
+  { value: 'NEAR_MISS',   label: 'Near miss' },
+  { value: 'FALSE_ALARM', label: 'False alarm' },
+]
+const OUTCOME_LABEL = Object.fromEntries(OUTCOMES.map(o => [o.value, o.label]))
+
+// Risk breakdown recorded on-chain by the gateway (TG-015)
+const FACTOR_LABEL = { base: 'base', heat: 'heat', night: 'night shift', repeat: 'repeat events', genuineHistory: 'genuine history',
+  falseAlarmHistory: 'false-alarm history', weakSignal: 'weak signal' }
+export function riskDrivers(inc) {
+  const f = inc?.risk?.factors
+  if (!f) return null
+  const parts = Object.keys(FACTOR_LABEL).filter(k => typeof f[k] === 'number')
+    .map(k => k === 'base' ? `base ${f[k]}` : `${FACTOR_LABEL[k]} ${f[k] > 0 ? '+' : ''}${f[k]}`)
+  if (f.heatBand) parts.push(`(${f.heatBand.replace('_', ' ').toLowerCase()}, HI ${f.heatIndexC}°C)`)
+  return `${parts.join(' · ')} — ${inc.risk.modelVersion}`
+}
+
 
 export default function SupervisorView({ session }) {
   const [incidents, setIncidents] = useState([])
@@ -18,6 +44,8 @@ export default function SupervisorView({ session }) {
   const [loading,   setLoading]   = useState(true)
   const [updating,  setUpdating]  = useState(null)
   const [error,     setError]     = useState(null)
+  const [outcome,   setOutcome]   = useState('')
+  const [notes,     setNotes]     = useState('')
 
   const headers = { 'x-identity': session.identity }
 
@@ -26,12 +54,27 @@ export default function SupervisorView({ session }) {
       const res = await axios.get(`${API}/incidents`, { headers })
       setIncidents(res.data.incidents || [])
       setError(null)
+      return res.data.incidents || []
     } catch (err) {
       setError('Failed to load incidents from ledger')
     } finally {
       setLoading(false)
     }
   }, [session.identity])
+
+  // ── Live alerts (TG-016): banner + beep + tab title for unacknowledged incidents of the last hour
+  const seenRef = useRef(null)
+  const RECENT_MS = 60 * 60 * 1000
+  const openAlerts = incidents
+    .filter(i => (i.status === 'TRIGGERED' || i.status === 'ESCALATED') && Date.now() - Date.parse(i.timestamp) < RECENT_MS)
+    .sort((a, b) => Date.parse(b.timestamp) - Date.parse(a.timestamp))
+  useEffect(() => {
+    const ids = openAlerts.map(i => i.incidentId)
+    if (seenRef.current && ids.some(id => !seenRef.current.has(id))) beep()
+    if (!loading) seenRef.current = new Set([...(seenRef.current || []), ...ids])
+    document.title = openAlerts.length ? `(${openAlerts.length}) 🚨 IINoT Safety Monitor` : 'IINoT Safety Monitor'
+  }, [incidents, loading])   // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => () => { document.title = 'IINoT Safety Monitor' }, [])
 
   useEffect(() => {
     fetchIncidents()
@@ -55,8 +98,10 @@ export default function SupervisorView({ session }) {
         `${API}/incidents/${incidentId}/status`,
         { status }, { headers }
       )
-      await fetchIncidents()
-      setSelected(prev => prev?.incidentId === incidentId ? { ...prev, status } : prev)
+      // Reload from the ledger so the panel shows updatedBy / updatedAt too
+      const list = await fetchIncidents()
+      setSelected(prev => prev?.incidentId === incidentId
+        ? (list?.find(i => i.incidentId === incidentId) || { ...prev, status }) : prev)
     } catch (err) {
       setError(`Failed to update: ${err.response?.data?.error}`)
     } finally {
@@ -64,12 +109,57 @@ export default function SupervisorView({ session }) {
     }
   }
 
-  const triggered    = incidents.filter(i => i.status === 'TRIGGERED')
+  async function resolveIncident(incidentId) {
+    setUpdating(incidentId)
+    try {
+      await axios.post(`${API}/incidents/${incidentId}/resolve`, { outcome, notes })
+      const list = await fetchIncidents()
+      setSelected(prev => prev?.incidentId === incidentId
+        ? (list?.find(i => i.incidentId === incidentId) || { ...prev, status: 'RESOLVED', outcome }) : prev)
+      setOutcome(''); setNotes('')
+    } catch (err) {
+      setError(`Failed to resolve: ${err.response?.data?.error}`)
+    } finally {
+      setUpdating(null)
+    }
+  }
+
+  const triggered    = incidents.filter(i => i.status === 'TRIGGERED' || i.status === 'ESCALATED')
   const acknowledged = incidents.filter(i => i.status === 'ACKNOWLEDGED')
   const resolved     = incidents.filter(i => i.status === 'RESOLVED')
 
   return (
     <div style={{ padding: '24px', maxWidth: '1200px', margin: '0 auto' }}>
+
+      <SiteConditions />
+
+      <ComplianceCard onOpenIncident={id => {
+        const i = incidents.find(x => x.incidentId === id)
+        if (i) { setSelected(i); setHistory(null); setOutcome(''); setNotes('') }
+      }} />
+
+      <AssignmentsPanel />
+
+      {openAlerts.length > 0 && (
+        <div style={{
+          background: openAlerts.some(i => i.status === 'ESCALATED') ? '#7E22CE' : '#C0392B', color: '#FFFFFF',
+          borderRadius: '10px', padding: '12px 16px', marginBottom: '16px',
+          display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '8px 16px', fontSize: '13px',
+        }}>
+          <strong style={{ fontSize: '14px' }}>
+            🚨 {openAlerts.length} alert{openAlerts.length > 1 ? 's' : ''} waiting for acknowledgement
+          </strong>
+          {openAlerts.slice(0, 3).map(i => (
+            <button key={i.incidentId} onClick={() => { setSelected(i); setHistory(null); setOutcome(''); setNotes('') }} style={{
+              background: 'rgba(255,255,255,0.15)', color: '#FFFFFF', border: '1px solid rgba(255,255,255,0.5)',
+              borderRadius: '6px', padding: '4px 10px', cursor: 'pointer', fontSize: '12px',
+            }}>
+              {i.eventType} · {i.deviceId} · risk {i.riskScore} · {Math.max(0, Math.round((Date.now() - Date.parse(i.timestamp)) / 60000))} min
+              {i.escalationLevel ? ` · L${i.escalationLevel}` : ''}
+            </button>
+          ))}
+        </div>
+      )}
 
       {/* Stats */}
       <div style={{ display: 'flex', gap: '16px', marginBottom: '24px', flexWrap: 'wrap' }}>
@@ -135,7 +225,7 @@ export default function SupervisorView({ session }) {
                 return (
                   <div
                     key={inc.incidentId}
-                    onClick={() => { setSelected(inc); setHistory(null) }}
+                    onClick={() => { setSelected(inc); setHistory(null); setOutcome(''); setNotes('') }}
                     style={{
                       background: isSelected ? '#EAF6F4' : '#FFFFFF',
                       border: `1px solid ${isSelected ? '#02C39A' : '#E2E8F0'}`,
@@ -162,7 +252,7 @@ export default function SupervisorView({ session }) {
                         borderRadius: '12px', padding: '2px 10px',
                         fontSize: '11px', fontWeight: 600
                       }}>
-                        {inc.status}
+                        {inc.status}{inc.escalationLevel && inc.status === 'ESCALATED' ? ` L${inc.escalationLevel}` : ''}
                       </span>
                     </div>
                     <div style={{ fontSize: '11px', color: '#94A3B8', marginTop: '6px' }}>
@@ -199,7 +289,11 @@ export default function SupervisorView({ session }) {
               ['Device',     selected.deviceId],
               ['Event',      selected.eventType],
               ['Risk score', selected.riskScore],
+              ...(riskDrivers(selected) ? [['Risk drivers', riskDrivers(selected)]] : []),
               ['Status',     selected.status],
+              ...(selected.escalationLevel ? [['Escalation', `Level ${selected.escalationLevel} · ${selected.escalationReason || ''}`]] : []),
+              ...(selected.outcome ? [['Outcome', OUTCOME_LABEL[selected.outcome] || selected.outcome]] : []),
+              ...(selected.resolutionNotes ? [['Notes', selected.resolutionNotes]] : []),
               ['Time',       new Date(selected.timestamp).toLocaleString()],
               ['Created by', selected.createdBy?.split('/CN=')[1]?.split(':')[0] || '—'],
               ['Updated by', selected.updatedBy?.split('/CN=')[1]?.split(':')[0] || '—'],
@@ -218,7 +312,7 @@ export default function SupervisorView({ session }) {
             ))}
 
             <div style={{ marginTop: '16px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
-              {selected.status === 'TRIGGERED' && (
+              {(selected.status === 'TRIGGERED' || selected.status === 'ESCALATED') && (
                 <button
                   onClick={() => updateStatus(selected.incidentId, 'ACKNOWLEDGED')}
                   disabled={updating === selected.incidentId}
@@ -232,17 +326,34 @@ export default function SupervisorView({ session }) {
                 </button>
               )}
               {selected.status === 'ACKNOWLEDGED' && (
-                <button
-                  onClick={() => updateStatus(selected.incidentId, 'RESOLVED')}
-                  disabled={updating === selected.incidentId}
-                  style={{
-                    background: '#028090', color: '#FFFFFF',
-                    border: 'none', borderRadius: '8px', padding: '10px',
-                    cursor: 'pointer', fontWeight: 600, fontSize: '13px'
-                  }}
-                >
-                  {updating === selected.incidentId ? 'Updating...' : '✓ Mark Resolved'}
-                </button>
+                <div style={{ border: '1px solid #E2E8F0', borderRadius: '8px', padding: '10px' }}>
+                  <div style={{ fontSize: '12px', fontWeight: 600, color: '#334155', marginBottom: '6px' }}>
+                    Resolve — what was it?
+                  </div>
+                  <select value={outcome} onChange={e => setOutcome(e.target.value)} style={{
+                    width: '100%', padding: '8px', borderRadius: '6px',
+                    border: '1px solid #CBD5E1', fontSize: '13px', marginBottom: '6px'
+                  }}>
+                    <option value="">Select outcome…</option>
+                    {OUTCOMES.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+                  </select>
+                  <textarea value={notes} onChange={e => setNotes(e.target.value.slice(0, 500))}
+                    placeholder="Notes (optional)" rows={2} style={{
+                      width: '100%', padding: '8px', borderRadius: '6px', boxSizing: 'border-box',
+                      border: '1px solid #CBD5E1', fontSize: '12px', marginBottom: '6px', resize: 'vertical'
+                    }} />
+                  <button
+                    onClick={() => resolveIncident(selected.incidentId)}
+                    disabled={!outcome || updating === selected.incidentId}
+                    style={{
+                      width: '100%', background: outcome ? '#028090' : '#CBD5E1', color: '#FFFFFF',
+                      border: 'none', borderRadius: '8px', padding: '10px',
+                      cursor: outcome ? 'pointer' : 'not-allowed', fontWeight: 600, fontSize: '13px'
+                    }}
+                  >
+                    {updating === selected.incidentId ? 'Updating...' : '✓ Mark Resolved'}
+                  </button>
+                </div>
               )}
               <button
                 onClick={() => loadHistory(selected.incidentId)}
@@ -253,6 +364,11 @@ export default function SupervisorView({ session }) {
                 }}
               >📋 View Audit Trail</button>
             </div>
+
+            <StatutoryPanel incident={selected} onChanged={async () => {
+              const list = await fetchIncidents()
+              setSelected(prev => list?.find(i => i.incidentId === prev?.incidentId) || prev)
+            }} />
 
             {history?.id === selected.incidentId && (
               <div style={{ marginTop: '16px' }}>
@@ -282,4 +398,18 @@ export default function SupervisorView({ session }) {
       </div>
     </div>
   )
+}
+
+// Short two-tone alert (Web Audio — works over plain HTTP once the user has clicked on the page)
+function beep() {
+  try {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)()
+    ;[880, 660].forEach((f, k) => {
+      const o = ctx.createOscillator(), g = ctx.createGain()
+      o.frequency.value = f; o.connect(g); g.connect(ctx.destination)
+      g.gain.setValueAtTime(0.2, ctx.currentTime + k * 0.25)
+      o.start(ctx.currentTime + k * 0.25); o.stop(ctx.currentTime + k * 0.25 + 0.2)
+    })
+    setTimeout(() => ctx.close(), 1000)
+  } catch { /* audio not available */ }
 }

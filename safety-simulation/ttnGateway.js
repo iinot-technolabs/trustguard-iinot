@@ -4,8 +4,8 @@
 //
 // Subscribes to TTN or ChirpStack MQTT feed, decodes beacon uplinks,
 // stores raw payloads off-chain in SQLite, computes SHA-256 hash, and
-// submits LogIncident transactions to the IINoT Fabric network using
-// the gateway1 identity (role=gateway:ecert).
+// submits LogIncident transactions to the Fabric network as the identity
+// with role=gateway from the network config (GATEWAY_IDENTITY overrides).
 //
 // Usage:
 //   TTN mode (default):
@@ -14,7 +14,7 @@
 //
 //   ChirpStack mode:
 //     export GATEWAY_MODE=chirpstack CHIRPSTACK_HOST=localhost
-//     export CHIRPSTACK_APP_ID=a3b1501e-b882-42a2-bed9-444296fb6555
+//     export CHIRPSTACK_APP_ID=<your ChirpStack application ID>
 //     node ttnGateway.js
 
 const mqtt     = require('mqtt');
@@ -24,6 +24,7 @@ const path     = require('path');
 const Database = require('better-sqlite3');
 const grpc     = require('@grpc/grpc-js');
 const { connect, signers } = require('@hyperledger/fabric-gateway');
+const risk     = require('./risk/riskModel');            // TG-015 risk scoring
 
 // ─────────────────────────────────────────────────────────────
 // GATEWAY MODE — set GATEWAY_MODE=chirpstack to use ChirpStack
@@ -41,26 +42,23 @@ const CHIRPSTACK_HOST     = process.env.CHIRPSTACK_HOST     || 'localhost';
 const CHIRPSTACK_PORT     = parseInt(process.env.CHIRPSTACK_PORT || '1883');
 const CHIRPSTACK_USERNAME = process.env.CHIRPSTACK_USERNAME || 'admin';
 const CHIRPSTACK_PASSWORD = process.env.CHIRPSTACK_PASSWORD || '';
-const CHIRPSTACK_APP_ID   = process.env.CHIRPSTACK_APP_ID   || 'a3b1501e-b882-42a2-bed9-444296fb6555';
+const CHIRPSTACK_APP_ID   = process.env.CHIRPSTACK_APP_ID;   // per client: ChirpStack → Applications → ID
 
 // Scenario tag for latency report
 const SCENARIO = process.env.SCENARIO || (GATEWAY_MODE === 'chirpstack' ? 'vm-chirpstack' : 'vm-ttn');
 
 // ─────────────────────────────────────────────────────────────
-// IINOT NETWORK PATHS
+// NETWORK — channel, chaincode, peer, TLS, MSP and wallet come from the
+// deployed network model (common/tgnet.js). GATEWAY_IDENTITY overrides the
+// default: the first identity with role "gateway" in the network config.
 // ─────────────────────────────────────────────────────────────
-const IINOT_NETWORK_HOME = path.join(process.env.HOME, 'fabric', 'iinot-network');
-const CHANNEL_NAME       = 'iinot-safety-channel';
-const CHAINCODE_NAME     = 'safetycc';
-const PEER_ENDPOINT      = 'localhost:7051';
-const PEER_HOST_OVERRIDE = 'peer0.iinot-industry.com';
-const TLS_CERT_PATH = path.join(
-    IINOT_NETWORK_HOME,
-    'organizations', 'peerOrganizations', 'iinot-industry.com',
-    'peers', 'peer0.iinot-industry.com', 'tls', 'ca.crt'
-);
-const WALLET_DIR = path.join(__dirname, 'wallet');
-const DB_PATH    = path.join(__dirname, 'offchain.db');
+const tg      = require('../common/tgnet');
+const DB_PATH = tg.offchainDb();
+function gatewayIdentity() {
+    const id = process.env.GATEWAY_IDENTITY ? tg.identity(process.env.GATEWAY_IDENTITY) : tg.identityForRole('gateway');
+    if (!id) throw new Error('The deployed network has no identity with role "gateway". Add one in the Network Designer.');
+    return id;
+}
 
 // ─────────────────────────────────────────────────────────────
 // BEACON WAKE REASON MAPPING
@@ -83,39 +81,9 @@ let fabricConnection = null;
 
 async function getFabricConnection() {
     if (fabricConnection) return fabricConnection;
-
-    const certPath = path.join(WALLET_DIR, 'gateway1', 'cert.pem');
-    const keyPath  = path.join(WALLET_DIR, 'gateway1', 'key.pem');
-
-    if (!fs.existsSync(certPath)) {
-        throw new Error(
-            'gateway1 identity not found in wallet. ' +
-            'Run node enrollIdentities.js first.'
-        );
-    }
-
-    const credentials = fs.readFileSync(certPath);
-    const privateKey  = crypto.createPrivateKey(fs.readFileSync(keyPath));
-    const tlsRootCert = fs.readFileSync(TLS_CERT_PATH);
-
-    const grpcClient = new grpc.Client(
-        PEER_ENDPOINT,
-        grpc.credentials.createSsl(tlsRootCert),
-        { 'grpc.ssl_target_name_override': PEER_HOST_OVERRIDE }
-    );
-
-    const gateway = connect({
-        client:   grpcClient,
-        identity: { mspId: 'IINoTIndustryMSP', credentials },
-        signer:   signers.newPrivateKeySigner(privateKey)
-    });
-
-    const contract = gateway
-        .getNetwork(CHANNEL_NAME)
-        .getContract(CHAINCODE_NAME);
-
-    fabricConnection = { gateway, grpcClient, contract };
-    console.log('✅ Fabric connection established (gateway1 / IINoTIndustryMSP)');
+    const id = gatewayIdentity();
+    fabricConnection = tg.connect(id, { grpc, connect, signers });
+    console.log(`✅ Fabric connection established (${id.name} / ${id.mspId} → ${id.peerEndpoint}, channel ${id.channel})`);
     return fabricConnection;
 }
 
@@ -185,14 +153,14 @@ async function processUplink(topic, message) {
     const t_mqtt_received = Date.now();
     const raw = message.toString();
 
-    let wakeReason, gpsFix, deviceId, timestamp;
+    let wakeReason, gpsFix, deviceId, timestamp, rssi = null, snr = null;
 
     if (GATEWAY_MODE === 'chirpstack') {
         // ── ChirpStack mode ──────────────────────────────────
         let parsed;
         try { parsed = parseChirpStackUplink(raw); }
         catch (err) { console.error('ChirpStack parse error:', err.message); return; }
-        ({ deviceId, wakeReason, gpsFix, timestamp } = parsed);
+        ({ deviceId, wakeReason, gpsFix, timestamp, rssi, snr } = parsed);
     } else {
         // ── TTN mode (original) ──────────────────────────────
         const payload = JSON.parse(raw);
@@ -202,6 +170,8 @@ async function processUplink(topic, message) {
         gpsFix        = decoded.digital_in_5;
         deviceId      = payload.end_device_ids?.device_id || 'UNKNOWN';
         timestamp     = payload.received_at || new Date().toISOString();
+        rssi          = payload.uplink_message.rx_metadata?.[0]?.rssi ?? null;
+        snr           = payload.uplink_message.rx_metadata?.[0]?.snr ?? null;
     }
 
     // Ignore heartbeats (wakeReason 0 and 1)
@@ -239,28 +209,34 @@ async function processUplink(topic, message) {
             (incident_id, device_id, event_type, raw_payload, payload_hash, received_at)
         VALUES (?, ?, ?, ?, ?, ?)
     `).run(incidentId, deviceId, eventType, rawPayloadStr, payloadHash, receivedAt);
-    db.close();
     console.log(`📦 Stored off-chain in SQLite`);
 
     // L4 end
     const L4_hash_ms = Date.now() - t4_start;
 
+    // Risk score (TG-015) — falls back to the fixed v0 score if anything goes wrong
+    let scoreStr = riskScore, contextJson = null;
+    try {
+        const t_risk = Date.now();
+        const r = risk.score(db, { incidentId, deviceId, eventType, timestamp: receivedAt, rssi, snr });
+        scoreStr = String(r.score); contextJson = r.contextJson;
+        const parts = Object.entries(r.factors).map(([k, v]) => `${k} ${v >= 0 && k !== 'base' ? '+' : ''}${v}`).join(', ');
+        console.log(`🧮 Risk ${r.score} (${r.modelVersion}: ${parts}${r.oracleRef ? `; weather ${r.features.heatBand} HI ${r.features.heatIndexC}°C` : '; no weather'}) in ${Date.now() - t_risk}ms`);
+    } catch (err) {
+        console.warn(`⚠️  Risk scoring failed (${err.message}) — using fixed score ${riskScore}`);
+    }
+    db.close();
+
     // L5 start: Fabric endorsement + ordering + commit
     const t5_start = Date.now();
-    const { contract } = await getFabricConnection();
-    await contract.submitTransaction(
-        'LogIncident',
-        incidentId,
-        deviceId,
-        eventType,
-        payloadHash,
-        receivedAt,
-        riskScore
-    );
+    const fn = await submitIncident([incidentId, deviceId, eventType, payloadHash, receivedAt, scoreStr], contextJson);
     const L5_fabric_ms = Date.now() - t5_start;
-
-    console.log(`✅ LogIncident committed to iinot-safety-channel`);
-    console.log(`   Dashboard: http://103.35.165.84:5173\n`);
+    if (!fn) {
+        console.log(`⏳ ${incidentId} queued — will retry every 60 s until it reaches the ledger\n`);
+        return;
+    }
+    console.log(`✅ ${fn} committed to ${gatewayIdentity().channel}`);
+    if (process.env.DASHBOARD_URL) console.log(`   Dashboard: ${process.env.DASHBOARD_URL}\n`);
 
     // Total end-to-end
     const total_e2e_ms = Date.now() - t_chirpstack;
@@ -292,6 +268,102 @@ async function processUplink(topic, message) {
 }
 
 // ─────────────────────────────────────────────────────────────
+// Reliable submission (TG-015)
+//   • LogIncidentWithContext when a risk context exists, else LogIncident
+//   • a context the chaincode rejects → same incident via LogIncident (never lose an SOS)
+//   • connection errors → reconnect and retry (1 s, 3 s); still failing → submit_queue,
+//     retried every 60 s until committed
+// ─────────────────────────────────────────────────────────────
+function errText(err) { return (err.details || []).map(d => d.message).join('; ') || err.message || String(err); }
+
+function resetFabric() {
+    if (fabricConnection) {
+        try { fabricConnection.gateway.close(); fabricConnection.grpcClient.close(); } catch (_) {}
+        fabricConnection = null;
+    }
+}
+
+async function submitIncident(args, contextJson) {
+    let withContext = !!contextJson;
+    for (const waitMs of [0, 1000, 3000]) {
+        if (waitMs) await new Promise(r => setTimeout(r, waitMs));
+        const fn = withContext ? 'LogIncidentWithContext' : 'LogIncident';
+        try {
+            const { contract } = await getFabricConnection();
+            await contract.submitTransaction(fn, ...args, ...(withContext ? [contextJson] : []));
+            dequeue(args[0]);
+            return fn;
+        } catch (err) {
+            const msg = errText(err);
+            if (/already exists/.test(msg)) { dequeue(args[0]); return fn + ' (already on ledger)'; }
+            if (withContext && /oracleRef/.test(msg) && contextJson.includes('"oracleRef"')) {
+                // Weather reading not on the ledger: keep the score breakdown, drop only the reference
+                const c = JSON.parse(contextJson); delete c.oracleRef; c.factors.weather = 'reference rejected';
+                contextJson = JSON.stringify(c);
+                console.warn(`⚠️  Oracle reference rejected (${msg}) — retrying without it`);
+                continue;
+            }
+            if (withContext && /contextJson|oracleRef|factors|modelVersion|featureHash|LogIncidentWithContext/.test(msg)) {
+                console.warn(`⚠️  Context rejected (${msg}) — submitting with LogIncident`);
+                withContext = false; continue;
+            }
+            console.error(`❌ ${fn} failed: ${msg}`);
+            resetFabric();
+        }
+    }
+    enqueue(args, withContext ? contextJson : null);
+    return null;
+}
+
+function queueDb() {
+    const db = setupDatabase();
+    db.exec(`CREATE TABLE IF NOT EXISTS submit_queue (
+        incident_id TEXT PRIMARY KEY, args_json TEXT NOT NULL, context_json TEXT,
+        attempts INTEGER NOT NULL DEFAULT 0, last_error TEXT, created_at TEXT NOT NULL)`);
+    return db;
+}
+function enqueue(args, contextJson) {
+    const db = queueDb();
+    db.prepare(`INSERT INTO submit_queue (incident_id, args_json, context_json, attempts, created_at) VALUES (?,?,?,1,?)
+                ON CONFLICT(incident_id) DO UPDATE SET attempts = attempts + 1`)
+      .run(args[0], JSON.stringify(args), contextJson, new Date().toISOString());
+    db.close();
+}
+function dequeue(incidentId) {
+    const db = queueDb(); db.prepare('DELETE FROM submit_queue WHERE incident_id = ?').run(incidentId); db.close();
+}
+
+let retrying = false;
+async function retryQueue() {
+    if (retrying) return; retrying = true;
+    try {
+        const db = queueDb();
+        const rows = db.prepare('SELECT * FROM submit_queue ORDER BY created_at LIMIT 20').all();
+        db.close();
+        for (const row of rows) {
+            const fn = await submitIncident(JSON.parse(row.args_json), row.context_json);
+            if (fn) console.log(`✅ Queued ${row.incident_id} committed via ${fn}`);
+        }
+    } catch (err) { console.error('❌ Queue retry error:', err.message); }
+    finally { retrying = false; }
+}
+
+// Background: copy incident status/outcome from the ledger for the risk model's
+// history factors and as training labels (every 5 min, off the SOS path)
+async function syncOutcomes() {
+    try {
+        const { contract } = await getFabricConnection();
+        const db = setupDatabase();
+        const n = await risk.refreshOutcomes(db, contract);
+        db.close();
+        if (n) console.log(`🔄 Outcome sync: ${n} incidents refreshed from ledger`);
+    } catch (err) { console.error('❌ Outcome sync error:', errText(err)); }
+}
+setInterval(retryQueue, 60 * 1000);
+setInterval(syncOutcomes, 5 * 60 * 1000);
+setTimeout(syncOutcomes, 20 * 1000);
+
+// ─────────────────────────────────────────────────────────────
 // MQTT connection — TTN or ChirpStack based on GATEWAY_MODE
 // ─────────────────────────────────────────────────────────────
 const isTTN = GATEWAY_MODE !== 'chirpstack';
@@ -314,7 +386,11 @@ const uplinkTopic = isTTN
     ? `v3/${TTN_APP_ID}@ttn/devices/+/up`
     : `application/${CHIRPSTACK_APP_ID}/device/+/event/up`;
 
-console.log(`🚀 IINoT Gateway starting (mode: ${GATEWAY_MODE}, scenario: ${SCENARIO})...`);
+if (!isTTN && !CHIRPSTACK_APP_ID) {
+    console.error('❌ CHIRPSTACK_APP_ID is not set (ChirpStack → Applications → your application → ID). Set it in the gateway service environment.');
+    process.exit(2);
+}
+console.log(`🚀 TrustGuard Gateway starting (mode: ${GATEWAY_MODE}, scenario: ${SCENARIO})...`);
 if (isTTN) {
     console.log(`   TTN App     : ${TTN_APP_ID}`);
     console.log(`   TTN Region  : ${TTN_REGION}`);
@@ -323,8 +399,11 @@ if (isTTN) {
     console.log(`   App ID      : ${CHIRPSTACK_APP_ID}`);
 }
 console.log(`   MQTT URL    : ${mqttUrl}`);
-console.log(`   Fabric peer : ${PEER_ENDPOINT} (${PEER_HOST_OVERRIDE})`);
-console.log(`   Channel     : ${CHANNEL_NAME}\n`);
+{
+    const id = gatewayIdentity();
+    console.log(`   Fabric peer : ${id.peerEndpoint} (${id.peerHostOverride})`);
+    console.log(`   Channel     : ${id.channel} · chaincode ${id.chaincode} · as ${id.name} (${id.mspId})\n`);
+}
 
 const mqttClient = mqtt.connect(mqttUrl, mqttOptions);
 
@@ -336,7 +415,7 @@ mqttClient.on('connect', async () => {
         await getFabricConnection();
     } catch (err) {
         console.error('⚠️  Could not pre-connect to Fabric:', err.message);
-        console.error('   Make sure iinot-network is running and gateway1 is enrolled.');
+        console.error('   Make sure the network is deployed and the gateway identity is enrolled (Admin → Enroll Identities).');
     }
 
     mqttClient.subscribe(uplinkTopic, (err) => {
@@ -356,9 +435,7 @@ mqttClient.on('message', async (topic, message) => {
         console.error('❌ Error processing uplink:', err.message);
         // Reset cached Fabric connection on error
         if (fabricConnection) {
-            fabricConnection.gateway.close();
-            fabricConnection.grpcClient.close();
-            fabricConnection = null;
+            resetFabric();
             console.log('   Fabric connection reset — will reconnect on next uplink');
         }
     }

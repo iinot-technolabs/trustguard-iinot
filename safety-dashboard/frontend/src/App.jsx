@@ -3,10 +3,12 @@ import { useState, useEffect } from 'react'
 import LoginPage           from './LoginPage'
 import SupervisorView      from './SupervisorView'
 import AuditorView         from './AuditorView'
-import AdminView           from './AdminView'
+import InsurerView         from './InsurerView'
 import ConfigureNetworkPage from './ConfigureNetworkPage'
 import RulesDesignerPage   from './RulesDesignerPage'
 import DeployPage from './DeployPage'
+import AdminView from './AdminView'
+import { getSession, clearSession } from './api'
 
 // Shared nav-tab style factory
 function tabStyle(active) {
@@ -25,7 +27,7 @@ function tabStyle(active) {
 }
 
 // ── localStorage helpers (safe — throws silently in private mode) ──
-const LS_KEY = 'iinot_network_config';
+const LS_KEY = 'tg_network_config';
 
 function lsGet() {
   try { return JSON.parse(localStorage.getItem(LS_KEY) || 'null'); }
@@ -41,14 +43,26 @@ function lsClear() {
 }
 
 export default function App() {
-  const [session, setSession] = useState(null)
+  // Restore a still-valid session after a page refresh (token in sessionStorage)
+  const [session, setSession] = useState(() => getSession())
   const [view, setView]       = useState('dashboard')
+
+  // Any 401 from the API (expired or revoked session) returns to the login page
+  useEffect(() => {
+    const onExpired = () => { setSession(null); setView('dashboard') }
+    window.addEventListener('tg-session-expired', onExpired)
+    return () => window.removeEventListener('tg-session-expired', onExpired)
+  }, [])
+
+  const isAdmin = session?.role === 'admin'
 
   // Seed from localStorage immediately so the UI isn't blank while the API call resolves
   const [networkConfig, setNetworkConfig] = useState(() => lsGet())
 
-  // On mount: fetch the canonical config from the backend (overwrites stale localStorage)
+  // After an admin logs in: fetch the canonical config (overwrites stale localStorage).
+  // Admin-only on the backend, so other roles keep the localStorage copy.
   useEffect(() => {
+    if (!isAdmin) return
     fetch('/api/network-config')
       .then(r => r.ok ? r.json() : null)
       .then(cfg => {
@@ -58,28 +72,19 @@ export default function App() {
         }
       })
       .catch(() => { /* backend not yet up — use localStorage fallback */ });
-  }, []);
+  }, [isAdmin]);
 
   // Persist to localStorage whenever networkConfig changes
   useEffect(() => {
     if (networkConfig) {
       lsSet(networkConfig);
-      // Also push to backend so it survives a full browser refresh
-      fetch('/api/network-config', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(networkConfig),
-      }).catch(() => {});
+      // The Network Designer saves to the server itself (Validate & Save), with validation.
     }
-  }, [networkConfig]);
+  }, [networkConfig, isAdmin]);
 
   if (!session) {
     return <LoginPage onLogin={(s) => { setSession(s); setView('dashboard') }} />
   }
-
-  // Admin: the new dedicated bootstrap role (no Fabric dependency)
-  // Supervisor: operational role — can view the dashboard, but NOT the network config / deploy tabs
-  const isAdmin = session.role === 'admin'
 
   // Called by ConfigureNetworkPage when user previews/generates — we grab the config
   const handleNetworkConfigChange = (cfg) => {
@@ -118,9 +123,9 @@ export default function App() {
             </span>
           </div>
 
-          {/* Dashboard tab — always visible */}
+          {/* Dashboard tab — the admin's is the administration page */}
           <button onClick={() => setView('dashboard')} style={tabStyle(view === 'dashboard')}>
-            {isAdmin ? '🔧 Admin' : '📊 Dashboard'}
+            {isAdmin ? '🏠 Admin' : '📊 Dashboard'}
           </button>
 
           {/* Network Designer — admin only */}
@@ -137,7 +142,6 @@ export default function App() {
             </button>
           )}
 
-          {/* Deploy — admin only */}
           {isAdmin && (
             <button onClick={() => setView('deploy')} style={tabStyle(view === 'deploy')}>
               🚀 Deploy
@@ -149,11 +153,11 @@ export default function App() {
         <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
           <span style={{ color: '#EAF6F4', fontSize: '13px' }}>
             Logged in as{' '}
-            <strong style={{ color: '#02C39A' }}>{session.identity}</strong>{' '}
-            ({session.role})
+            <strong style={{ color: '#02C39A' }}>{session.username}</strong>{' '}
+            ({session.role}{session.identity ? ` · ${session.identity}` : ''})
           </span>
           <button
-            onClick={() => { setSession(null); setView('dashboard'); lsClear(); }}
+            onClick={() => { clearSession(); setSession(null); setView('dashboard'); lsClear(); }}
             style={{
               background: 'transparent', border: '1px solid #02C39A',
               color: '#02C39A', borderRadius: '6px', padding: '4px 12px',
@@ -190,15 +194,10 @@ export default function App() {
         />
       )}
 
-      {/* Admin dashboard — bootstrap guide */}
       {view === 'dashboard' && isAdmin && (
-        <AdminView
-          session={session}
-          onNavigate={(v) => setView(v)}
-        />
+        <AdminView onNavigate={setView} />
       )}
 
-      {/* Supervisor dashboard — incident monitoring */}
       {view === 'dashboard' && session.role === 'supervisor' && (
         <SupervisorView session={session} />
       )}
@@ -207,12 +206,10 @@ export default function App() {
         <AuditorView session={session} />
       )}
 
-      {view === 'dashboard' && session.role === 'gateway' && (
-        <div style={{ padding: '40px', textAlign: 'center', color: '#64748B' }}>
-          Gateway identities do not have a dashboard view.
-          Use the simulation scripts to submit incidents.
-        </div>
+      {view === 'dashboard' && session.role === 'claims-reviewer' && (
+        <InsurerView session={session} />
       )}
+
 
     </div>
   )

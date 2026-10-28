@@ -63,12 +63,37 @@ router.patch('/:id/status', async (req, res) => {
             'UpdateIncidentStatus', req.params.id,
             status, new Date().toISOString()
         );
+        // Fabric signs as the shared identity; record which user acted (TG-010)
+        console.log(`[audit] ${req.identity.username} (${identity}) set ${req.params.id} -> ${status}`);
         res.json({
             success: true,
             message: `Incident ${req.params.id} updated to ${status}`
         });
     } catch (err) {
         res.status(500).json({ success: false, error: err.message });
+    }
+});
+
+// Resolve with an outcome tag (chaincode 1.1 ResolveIncident) — TG-013
+router.post('/:id/resolve', async (req, res) => {
+    try {
+        const { identity, mspId, role, username } = req.identity;
+        if (role !== 'supervisor') {
+            return res.status(403).json({ success: false, error: 'Only supervisors can resolve incidents' });
+        }
+        const { outcome, notes = '' } = req.body || {};
+        if (!['GENUINE', 'FALSE_ALARM', 'NEAR_MISS'].includes(outcome)) {
+            return res.status(400).json({ success: false, error: 'outcome must be GENUINE, FALSE_ALARM or NEAR_MISS' });
+        }
+        if (typeof notes !== 'string' || notes.length > 500) {
+            return res.status(400).json({ success: false, error: 'notes must be text of at most 500 characters' });
+        }
+        const { contract } = await getConnection(identity, mspId);
+        await contract.submitTransaction('ResolveIncident', req.params.id, outcome, notes, new Date().toISOString());
+        console.log(`[audit] ${username} (${identity}) resolved ${req.params.id} outcome=${outcome}`);
+        res.json({ success: true, message: `Incident ${req.params.id} resolved as ${outcome}` });
+    } catch (err) {
+        res.status(500).json({ success: false, error: err.details?.[0]?.message || err.message });
     }
 });
 

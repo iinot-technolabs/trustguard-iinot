@@ -1,0 +1,15 @@
+{
+  "_comment": "TrustGuard IIoT risk model v1 (TG-015). Explainable weighted score 0-100. Edit weights here; bump modelVersion when you do.",
+  "modelVersion": "risk-v1",
+  "base": { "SOS": 80, "FALL": 75, "INACTIVITY": 55, "_default": 60 },
+  "heat": {
+    "points": { "NORMAL": 0, "CAUTION": 5, "EXTREME_CAUTION": 10, "DANGER": 18, "EXTREME_DANGER": 25 },
+    "multiplier": { "INACTIVITY": 1.5, "FALL": 1.5 },
+    "maxAgeMinutes": 90
+  },
+  "night": { "points": 8, "startHour": 22, "endHour": 6, "utcOffsetMinutes": 330 },
+  "repeat24h": { "atLeast1": 5, "atLeast3": 10 },
+  "history30d": { "genuinePoints": 5, "falseAlarmPoints": -10, "falseAlarmRate": 0.5, "minResolved": 4 },
+  "weakSignal": { "points": 4, "rssiBelow": -115, "snrBelow": -10 },
+  "clamp": { "min": 5, "max": 100 }
+}

@@ -3,24 +3,34 @@ import './ConfigureNetworkPage.css';
 
 // ─── Constants ─────────────────────────────────────────────────────────────
 
-const ENDORSEMENT_OPTIONS = [
-  { value: 'AND',      label: 'AND — all orgs must sign' },
-  { value: 'OR',       label: 'OR — any org can sign' },
-  { value: 'MAJORITY', label: 'MAJORITY — more than half' },
-  { value: 'OutOf',    label: 'OutOf — specify count' },
-];
-
+// Organisation types the platform understands (docs/NETWORK_CONFIG.md).
 const ORG_TYPES = [
-  { value: 'industry',  label: 'Industry',  color: '#3b82f6' },
-  { value: 'regulator', label: 'Regulator', color: '#8b5cf6' },
-  { value: 'insurer',   label: 'Insurer',   color: '#10b981' },
-  { value: 'custom',    label: 'Custom',    color: '#f59e0b' },
+  { value: 'employer',  label: 'Employer / Industry', color: '#3b82f6' },
+  { value: 'regulator', label: 'Regulator',           color: '#8b5cf6' },
+  { value: 'insurer',   label: 'Insurer',             color: '#10b981' },
 ];
 
-const ROLE_SUGGESTIONS = [
-  'gateway', 'supervisor', 'worker', 'auditor',
-  'safetyofficer', 'inspector', 'hsemanager',
+// Roles the safety chaincode checks (CA attribute "role").
+const APP_ROLES = [
+  { value: 'gateway',         label: 'gateway — IoT gateway, logs incidents' },
+  { value: 'supervisor',      label: 'supervisor — acknowledges, resolves, files Form 18' },
+  { value: 'auditor',         label: 'auditor — regulator, read-only' },
+  { value: 'oracle',          label: 'oracle — anchors weather readings' },
+  { value: 'claims-reviewer', label: 'claims-reviewer — insurer, claim evidence' },
 ];
+
+const roleOf = attrs => {
+  const m = String(attrs || '').match(/^role[.=]([a-z-]+)/) || String(attrs || '').match(/^([a-z-]+)$/);
+  return m ? m[1] : '';
+};
+const legacyType = t => (t === 'industry' || t === 'custom' || !t) ? 'employer' : t;
+
+// Endorsement policy as the deploy builds it: every enabled org marked "endorses" must sign.
+function derivedPolicy(orgs) {
+  const e = orgs.filter(o => o.enabled !== false && o.endorses).map(o => `'${o.mspId || '?'}.peer'`);
+  if (!e.length) return '— (no endorsing organisation)';
+  return e.length === 1 ? `OR(${e[0]})` : `AND(${e.join(',')})`;
+}
 
 const DEFAULT_CONFIG = {
   networkName:      'AP Factory Safety Network',
@@ -30,8 +40,10 @@ const DEFAULT_CONFIG = {
   fabricCAVersion:  '1.5.17',
   dockerNetworkName: '',
   genesisProfile:   '',
+  bindAddress:      '127.0.0.1',
   orderer: {
     orgName:           'OrdererOrg',
+    mspId:             'OrdererMSP',
     hostname:          'orderer',
     port:              7050,
     adminPort:         7053,
@@ -44,51 +56,41 @@ const DEFAULT_CONFIG = {
     maxMessageCount:   10,
     absoluteMaxBytes:  '98 MB',
     preferredMaxBytes: '512 KB',
-    endorsementPolicy: 'MAJORITY',
   },
   organizations: [
     {
-      id: genId(),
-      mspId: 'IINoTIndustryMSP',
-      displayName: 'Employer / Factory Owner',
-      type: 'industry',
-      domain: '',
-      caPort: 7054,
-      peerPort: 7051,
-      chaincodePort: 7052,
-      operationsPort: 17051,
-      caName: '',
-      caFolderName: '',
-      caAdminUser: 'admin',
-      caAdminPassword: 'adminpw',
+      id: genId(), mspId: 'IINoTIndustryMSP', displayName: 'Employer / Factory Owner',
+      type: 'employer', enabled: true, endorses: true, domain: '',
+      caPort: 7054, peerPort: 7051, chaincodePort: 7052, operationsPort: 17051,
+      caName: '', caFolderName: '',
       roles: [
-        { id: genId(), name: 'gateway1',    secret: 'gateway1pw',    attrs: 'role.gateway:ecert' },
-        { id: genId(), name: 'supervisor1', secret: 'supervisor1pw', attrs: 'role.supervisor:ecert' },
+        { id: genId(), name: 'gateway1',    attrs: 'role.gateway:ecert' },
+        { id: genId(), name: 'supervisor1', attrs: 'role.supervisor:ecert' },
       ],
     },
     {
-      id: genId(),
-      mspId: 'IINoTRegulatorMSP',
-      displayName: 'Inspector of Factories',
-      type: 'regulator',
-      domain: '',
-      caPort: 8054,
-      peerPort: 9051,
-      chaincodePort: 9052,
-      operationsPort: 19051,
-      caName: '',
-      caFolderName: '',
-      caAdminUser: 'admin',
-      caAdminPassword: 'adminpw',
+      id: genId(), mspId: 'IINoTRegulatorMSP', displayName: 'Inspector of Factories',
+      type: 'regulator', enabled: true, endorses: true, domain: '',
+      caPort: 8054, peerPort: 9051, chaincodePort: 9052, operationsPort: 19051,
+      caName: '', caFolderName: '',
       roles: [
-        { id: genId(), name: 'auditor1', secret: 'auditor1pw', attrs: 'role.auditor:ecert' },
+        { id: genId(), name: 'auditor1', attrs: 'role.auditor:ecert' },
+        { id: genId(), name: 'oracle1',  attrs: 'role.oracle:ecert' },
+      ],
+    },
+    {
+      id: genId(), mspId: 'IINoTInsurerMSP', displayName: 'Insurer',
+      type: 'insurer', enabled: false, endorses: false, domain: '',
+      caPort: 10054, peerPort: 11051, chaincodePort: 11052, operationsPort: 21051,
+      caName: '', caFolderName: '',
+      roles: [
+        { id: genId(), name: 'claims1', attrs: 'role.claims-reviewer:ecert' },
       ],
     },
   ],
   chaincode: {
-    name:              'safetyContract',
-    version:           '1.0',
-    endorsementPolicy: '',
+    name:              'safetycc',
+    version:           '1.3',
     eventTypes:        ['SOS', 'ManDown', 'GasAlert', 'OverTemp', 'Geofence'],
   },
   dashboard: {
@@ -125,8 +127,10 @@ function denormalizeConfig(saved) {
     fabricCAVersion:   net.fabricCAVersion   || '1.5.17',
     dockerNetworkName: net.dockerNetworkName || '',
     genesisProfile:    net.genesisProfile    || '',
+    bindAddress:       net.bindAddress       || '127.0.0.1',
     orderer: {
       orgName:           ord.orgName           || 'OrdererOrg',
+      mspId:             ord.mspId             || 'OrdererMSP',
       hostname:          ord.hostname          || 'orderer',
       port:              ord.port              || 7050,
       adminPort:         ord.adminPort         || 7053,
@@ -139,13 +143,14 @@ function denormalizeConfig(saved) {
       maxMessageCount:   ord.maxMessageCount   || 10,
       absoluteMaxBytes:  ord.absoluteMaxBytes  || '98 MB',
       preferredMaxBytes: ord.preferredMaxBytes || '512 KB',
-      endorsementPolicy: 'MAJORITY',
     },
     organizations: (saved.organizations || []).map(org => ({
       id:              genId(),
       mspId:           org.id   || '',
       displayName:     org.name || '',
-      type:            org.type || 'industry',
+      type:            legacyType(org.type),
+      enabled:         org.enabled !== false,
+      endorses:        typeof org.endorses === 'boolean' ? org.endorses : legacyType(org.type) !== 'insurer',
       domain:          org.domain || '',
       caPort:          org.caPort          || 7054,
       peerPort:        org.peerPort        || 7051,
@@ -153,19 +158,15 @@ function denormalizeConfig(saved) {
       operationsPort:  org.operationsPort  || 17051,
       caName:          org.caName          || '',
       caFolderName:    org.caFolderName    || '',
-      caAdminUser:     org.caAdminUser     || 'admin',
-      caAdminPassword: org.caAdminPassword || 'adminpw',
       roles: (org.roles || []).map(r => ({
         id:     genId(),
         name:   r.name   || '',
-        secret: r.secret || '',
         attrs:  r.attrs  || '',
       })),
     })),
     chaincode: {
-      name:              (saved.chaincode || {}).name              || 'safetyContract',
-      version:           (saved.chaincode || {}).version           || '1.0',
-      endorsementPolicy: '',
+      name:              (saved.chaincode || {}).name              || 'safetycc',
+      version:           (saved.chaincode || {}).version           || '1.3',
       eventTypes:        (saved.chaincode || {}).eventTypes        || ['SOS','ManDown','GasAlert','OverTemp','Geofence'],
     },
     dashboard: {
@@ -206,20 +207,6 @@ function Input({ value, onChange, placeholder, type = 'text', min, max }) {
         onChange(v);
       }}
     />
-  );
-}
-
-function Select({ value, onChange, options }) {
-  return (
-    <select
-      className="cn-input cn-select"
-      value={value}
-      onChange={e => onChange(e.target.value)}
-    >
-      {options.map(o => (
-        <option key={o.value} value={o.value}>{o.label}</option>
-      ))}
-    </select>
   );
 }
 
@@ -298,14 +285,14 @@ function OrgCard({ org, index, total, onChange, onRemove, onMove }) {
 
   const upd = (key, val) => onChange({ ...org, [key]: val });
 
-  const orgType = ORG_TYPES.find(t => t.value === org.type) || ORG_TYPES[3];
+  const orgType = ORG_TYPES.find(t => t.value === org.type) || ORG_TYPES[0];
 
   const addRole = () => {
     onChange({
       ...org,
       roles: [
         ...org.roles,
-        { id: genId(), name: '', secret: '', attrs: '' },
+        { id: genId(), name: '', attrs: '' },
       ],
     });
   };
@@ -328,6 +315,8 @@ function OrgCard({ org, index, total, onChange, onRemove, onMove }) {
           <span className="cn-org-type-dot" style={{ background: orgType.color }} />
           <span className="cn-org-name">{org.displayName || `Org ${index + 1}`}</span>
           <span className="cn-org-msp">{org.mspId || '—'}</span>
+          {org.enabled === false && <span className="cn-org-msp" style={{ background: '#FEE2E2', color: '#991B1B' }}>not in network</span>}
+          {org.enabled !== false && org.endorses && <span className="cn-org-msp" style={{ background: '#DCFCE7', color: '#166534' }}>endorses</span>}
         </div>
         <div className="cn-org-header-right">
           <button
@@ -344,7 +333,7 @@ function OrgCard({ org, index, total, onChange, onRemove, onMove }) {
           >↓</button>
           <button
             className="cn-org-remove-btn"
-            disabled={total <= 2}
+            disabled={total <= 1}
             onClick={e => { e.stopPropagation(); onRemove(); }}
             title="Remove org"
           >×</button>
@@ -361,11 +350,25 @@ function OrgCard({ org, index, total, onChange, onRemove, onMove }) {
                 key={t.value}
                 className={`cn-type-chip ${org.type === t.value ? 'cn-type-chip--selected' : ''}`}
                 style={org.type === t.value ? { background: t.color, borderColor: t.color } : {}}
-                onClick={() => upd('type', t.value)}
+                onClick={() => onChange({ ...org, type: t.value, endorses: t.value !== 'insurer' })}
               >
                 {t.label}
               </button>
             ))}
+          </div>
+
+          {/* Membership and endorsement */}
+          <div style={{ display: 'flex', gap: '24px', flexWrap: 'wrap', margin: '6px 0 12px', fontSize: '13px' }}>
+            <label style={{ display: 'flex', gap: '6px', alignItems: 'center', cursor: 'pointer' }}>
+              <input type="checkbox" checked={org.enabled !== false} onChange={e => upd('enabled', e.target.checked)} />
+              Include in the network{org.type === 'insurer' ? ' (insurer toggle)' : ''}
+            </label>
+            <label style={{ display: 'flex', gap: '6px', alignItems: 'center', cursor: 'pointer' }}
+                   title="Every transaction must be signed by this organisation's peer">
+              <input type="checkbox" checked={!!org.endorses} disabled={org.enabled === false}
+                     onChange={e => upd('endorses', e.target.checked)} />
+              Must endorse every write
+            </label>
           </div>
 
           {/* Primary fields */}
@@ -393,7 +396,7 @@ function OrgCard({ org, index, total, onChange, onRemove, onMove }) {
             onClick={() => setShowAdvanced(s => !s)}
           >
             <span className="cn-advanced-toggle-arrow">▶</span>
-            Advanced (chaincode port, operations port, CA credentials)
+            Advanced (chaincode port, operations port, CA name)
           </button>
 
           {showAdvanced && (
@@ -410,12 +413,6 @@ function OrgCard({ org, index, total, onChange, onRemove, onMove }) {
               <Field label="CA Folder">
                 <Input value={org.caFolderName} onChange={v => upd('caFolderName', v)} placeholder="auto-derived" />
               </Field>
-              <Field label="CA Admin User">
-                <Input value={org.caAdminUser} onChange={v => upd('caAdminUser', v)} placeholder="admin" />
-              </Field>
-              <Field label="CA Admin Password">
-                <Input value={org.caAdminPassword} onChange={v => upd('caAdminPassword', v)} placeholder="adminpw" />
-              </Field>
             </div>
           )}
 
@@ -423,7 +420,7 @@ function OrgCard({ org, index, total, onChange, onRemove, onMove }) {
           <div className="cn-roles-section">
             <div className="cn-roles-label">
               Identities &amp; Roles
-              <span className="cn-hint" style={{ marginLeft: '6px' }}>— enrolled on this org's CA</span>
+              <span className="cn-hint" style={{ marginLeft: '6px' }}>— registered on this org's CA with a random secret at deploy</span>
             </div>
             {org.roles.length > 0 && (
               <div className="cn-role-list">
@@ -432,30 +429,22 @@ function OrgCard({ org, index, total, onChange, onRemove, onMove }) {
                     <input
                       className="cn-input"
                       value={role.name}
-                      placeholder="identity name"
-                      onChange={e => updateRole(role.id, 'name', e.target.value)}
-                      list={`suggestions-${org.id}`}
+                      placeholder="identity name, e.g. gateway1"
+                      onChange={e => updateRole(role.id, 'name', e.target.value.toLowerCase())}
                     />
-                    <input
-                      className="cn-input"
-                      value={role.secret}
-                      placeholder="password"
-                      onChange={e => updateRole(role.id, 'secret', e.target.value)}
-                    />
-                    <input
-                      className="cn-input"
-                      value={role.attrs}
-                      placeholder="role.gateway:ecert"
-                      onChange={e => updateRole(role.id, 'attrs', e.target.value)}
-                    />
+                    <select
+                      className="cn-input cn-select"
+                      value={roleOf(role.attrs)}
+                      onChange={e => updateRole(role.id, 'attrs', `role.${e.target.value}:ecert`)}
+                    >
+                      <option value="" disabled>choose a role…</option>
+                      {APP_ROLES.map(r => <option key={r.value} value={r.value}>{r.label}</option>)}
+                    </select>
                     <button className="cn-role-remove" onClick={() => removeRole(role.id)}>×</button>
                   </div>
                 ))}
               </div>
             )}
-            <datalist id={`suggestions-${org.id}`}>
-              {ROLE_SUGGESTIONS.map(s => <option key={s} value={s} />)}
-            </datalist>
             <button className="cn-add-role-btn" onClick={addRole}>+ Add Identity</button>
           </div>
         </div>
@@ -519,6 +508,8 @@ export default function ConfigureNetworkPage({ onBack, onConfigChange, initialCo
   const [showJson, setShowJson] = useState(false);
   const [status, setStatus] = useState(null);
   const [generating, setGenerating] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [check, setCheck] = useState(null);   // server validation: { ok, summary } | { ok:false, problems }
 
   // Which section is open: 0=Network, 1=Orderer, 2=Orgs, 3=Chaincode, 4=Dashboard
   const [openSection, setOpenSection] = useState(0);
@@ -544,13 +535,12 @@ export default function ConfigureNetworkPage({ onBack, onConfigChange, initialCo
         ...c.organizations,
         {
           id: genId(),
-          mspId: '', displayName: '', type: 'custom', domain: '',
+          mspId: '', displayName: '', type: 'regulator', enabled: true, endorses: false, domain: '',
           caPort:         8054 + c.organizations.length * 1000,
           peerPort:       9051 + c.organizations.length * 2000,
           chaincodePort:  9052 + c.organizations.length * 2000,
           operationsPort: 19051 + c.organizations.length * 2000,
           caName: '', caFolderName: '',
-          caAdminUser: 'admin', caAdminPassword: 'adminpw',
           roles: [],
         },
       ],
@@ -582,11 +572,13 @@ export default function ConfigureNetworkPage({ onBack, onConfigChange, initialCo
         channel:           net.channelName,
         fabricVersion:     net.fabricVersion,
         fabricCAVersion:   net.fabricCAVersion,
-        genesisProfile:    net.genesisProfile     || `${net.networkName.replace(/\s+/g, '')}Genesis`,
-        dockerNetworkName: net.dockerNetworkName  || net.channelName.replace(/-/g, '_'),
+        genesisProfile:    net.genesisProfile     || `${net.networkName.replace(/[^A-Za-z0-9]/g, '')}Genesis`,
+        dockerNetworkName: net.dockerNetworkName  || net.channelName.replace(/[^a-z0-9]/g, '_'),
+        bindAddress:       net.bindAddress        || '127.0.0.1',
       },
       orderer: {
         orgName:           ord.orgName,
+        mspId:             ord.mspId || 'OrdererMSP',
         domain:            ordererDomain,
         port:              ord.port,
         adminPort:         ord.adminPort,
@@ -607,6 +599,9 @@ export default function ConfigureNetworkPage({ onBack, onConfigChange, initialCo
         return {
           id:              org.mspId,
           name:            org.displayName,
+          type:            org.type,
+          enabled:         org.enabled !== false,
+          endorses:        !!org.endorses,
           domain:          derivedDomain,
           peerPort:        org.peerPort,
           chaincodePort:   org.chaincodePort,
@@ -614,16 +609,15 @@ export default function ConfigureNetworkPage({ onBack, onConfigChange, initialCo
           caPort:          org.caPort,
           caName:          derivedCaName,
           caFolderName:    derivedCaFolder,
-          caAdminUser:     org.caAdminUser,
-          caAdminPassword: org.caAdminPassword,
-          roles:           org.roles.map(r => ({ name: r.name, secret: r.secret, attrs: r.attrs })),
+          roles:           org.roles.map(r => ({ name: r.name, attrs: r.attrs })),
         };
       }),
       chaincode: {
         name:              config.chaincode.name,
         version:           config.chaincode.version,
-        endorsementPolicy: config.chaincode.endorsementPolicy
-                            || `${config.orderer.endorsementPolicy}(${config.organizations.map(o => `'${o.mspId}.member'`).join(',')})`,
+        sequence:          1,
+        path:              'safety-chaincode',
+        lang:              'node',
         accessRules:       {},
         eventTypes:        config.chaincode.eventTypes,
       },
@@ -643,12 +637,42 @@ export default function ConfigureNetworkPage({ onBack, onConfigChange, initialCo
     config.organizations.forEach((org, i) => {
       if (!org.mspId)       errors.push(`Org ${i + 1}: MSP ID required`);
       if (!org.displayName) errors.push(`Org ${i + 1}: Display name required`);
+      org.roles.forEach(r => { if (!r.name || !roleOf(r.attrs)) errors.push(`Org ${i + 1}: every identity needs a name and a role`); });
     });
-    const ports = config.organizations.flatMap(o => [o.caPort, o.peerPort, o.chaincodePort, o.operationsPort]);
+    const active = config.organizations.filter(o => o.enabled !== false);
+    if (!active.some(o => o.endorses)) errors.push('At least one organisation must endorse every write');
+    const ports = active.flatMap(o => [o.caPort, o.peerPort, o.chaincodePort, o.operationsPort]);
     ports.push(config.orderer.port, config.orderer.caPort, config.orderer.adminPort);
     const dups = ports.filter((p, i) => ports.indexOf(p) !== i);
     if (dups.length) errors.push(`Port conflict: ${[...new Set(dups)].join(', ')}`);
     return errors;
+  };
+
+  // ── Validate & Save (server checks every rule the deploy will apply) ────
+  const handleSave = async () => {
+    const errors = validate();
+    if (errors.length) { setStatus({ type: 'error', message: errors.join(' · ') }); return; }
+    setSaving(true);
+    setStatus({ type: 'loading', message: 'Validating on the server…' });
+    try {
+      const payload = buildNetworkConfigJson();
+      const res = await fetch('/api/network-config', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok || !body.ok) {
+        setCheck({ ok: false, problems: body.problems || [body.error || res.statusText] });
+        setStatus({ type: 'error', message: 'The network config has problems — see the list below.' });
+        return;
+      }
+      setCheck(body);
+      if (onConfigChange) onConfigChange(payload);
+      setStatus({ type: 'success', message: `Saved. Policy ${body.summary.endorsementPolicy}. Go to Deploy to build this network.` });
+    } catch (err) {
+      setStatus({ type: 'error', message: err.message });
+    } finally {
+      setSaving(false);
+    }
   };
 
   // ── Generate & Download ─────────────────────────────────────────────────
@@ -669,7 +693,7 @@ export default function ConfigureNetworkPage({ onBack, onConfigChange, initialCo
       });
       if (!res.ok) {
         const err = await res.json().catch(() => ({ error: res.statusText }));
-        throw new Error(err.error || 'Server error');
+        throw new Error(err.problems ? err.problems.join(' · ') : (err.error || 'Server error'));
       }
       const blob = await res.blob();
       const url  = URL.createObjectURL(blob);
@@ -678,7 +702,7 @@ export default function ConfigureNetworkPage({ onBack, onConfigChange, initialCo
       a.download = `${config.networkName.replace(/\s+/g, '-').toLowerCase()}-configs.zip`;
       document.body.appendChild(a); a.click();
       document.body.removeChild(a); URL.revokeObjectURL(url);
-      setStatus({ type: 'success', message: '7 config files generated and downloaded as ZIP.' });
+      setStatus({ type: 'success', message: 'configtx.yaml, docker-compose.yaml and network-config.json downloaded as a ZIP (no secrets included).' });
     } catch (err) {
       setStatus({ type: 'error', message: err.message });
     } finally {
@@ -688,8 +712,10 @@ export default function ConfigureNetworkPage({ onBack, onConfigChange, initialCo
 
   // ── Section summaries (collapsed view) ─────────────────────────────────
   const netSummary  = [config.networkName, config.channelName, config.domain].filter(Boolean).join(' · ') || 'Not configured';
-  const ordSummary  = `${config.orderer.hostname}.${config.domain || '…'} · port ${config.orderer.port} · ${config.orderer.nodeCount} node · ${config.orderer.batchTimeout}`;
-  const orgSummary  = config.organizations.map(o => o.displayName || o.mspId || '—').join(', ');
+  const ordSummary  = `${config.orderer.hostname}.${config.domain || '…'} · port ${config.orderer.port} · ${config.orderer.batchTimeout}`;
+  const orgSummary  = config.organizations.map(o => `${o.displayName || o.mspId || '—'}${o.enabled === false ? ' (off)' : ''}`).join(', ');
+  const policy      = derivedPolicy(config.organizations);
+  const insurer     = config.organizations.find(o => o.type === 'insurer');
   const ccSummary   = `${config.chaincode.name} v${config.chaincode.version} · ${config.chaincode.eventTypes.length} event types`;
   const dashSummary = `Backend :${config.dashboard.backendPort}`;
 
@@ -753,6 +779,9 @@ export default function ConfigureNetworkPage({ onBack, onConfigChange, initialCo
           <Field label="Genesis Profile" hint="auto-derived if blank">
             <Input value={config.genesisProfile} onChange={v => setConfig(c => ({ ...c, genesisProfile: v }))} placeholder="APFactorySafetyGenesis" />
           </Field>
+          <Field label="Bind Address" hint="127.0.0.1 = Fabric ports reachable only on this server">
+            <Input value={config.bindAddress} onChange={v => setConfig(c => ({ ...c, bindAddress: v }))} placeholder="127.0.0.1" />
+          </Field>
         </div>
       </Section>
 
@@ -769,6 +798,9 @@ export default function ConfigureNetworkPage({ onBack, onConfigChange, initialCo
           <Field label="Orderer Org Name">
             <Input value={config.orderer.orgName} onChange={v => updateOrderer('orgName', v)} placeholder="OrdererOrg" />
           </Field>
+          <Field label="Orderer MSP ID">
+            <Input value={config.orderer.mspId} onChange={v => updateOrderer('mspId', v)} placeholder="OrdererMSP" />
+          </Field>
           <Field label="Hostname" hint="hostname.domain = orderer address">
             <Input value={config.orderer.hostname} onChange={v => updateOrderer('hostname', v)} placeholder="orderer" />
           </Field>
@@ -781,12 +813,7 @@ export default function ConfigureNetworkPage({ onBack, onConfigChange, initialCo
           <Field label="CA Port">
             <Input type="number" value={config.orderer.caPort} onChange={v => updateOrderer('caPort', v)} min={1024} max={65535} />
           </Field>
-          <Field label="Node Count" hint="1 = single orderer; 3+ = Raft HA">
-            <Input type="number" value={config.orderer.nodeCount} onChange={v => updateOrderer('nodeCount', v)} min={1} max={7} />
-          </Field>
-          <Field label="Endorsement Policy">
-            <Select value={config.orderer.endorsementPolicy} onChange={v => updateOrderer('endorsementPolicy', v)} options={ENDORSEMENT_OPTIONS} />
-          </Field>
+
         </div>
 
         <div className="cn-field-grid" style={{ marginTop: '12px' }}>
@@ -835,11 +862,11 @@ export default function ConfigureNetworkPage({ onBack, onConfigChange, initialCo
           ))}
         </div>
         <button className="cn-add-org-btn" onClick={addOrg}>+ Add Organisation</button>
-        {config.organizations.length >= 3 && (
-          <div className="cn-info" style={{ marginTop: '12px' }}>
-            <strong>3-org network:</strong> Consider setting Endorsement Policy to AND or MAJORITY for regulatory compliance.
-          </div>
-        )}
+        <div className="cn-info" style={{ marginTop: '12px' }}>
+          <strong>Endorsement policy:</strong> <code>{policy}</code> — every organisation ticked
+          “Must endorse every write” signs each transaction. Keep the regulator endorsing: with three
+          organisations, a majority rule would let employer + insurer write without the regulator.
+        </div>
       </Section>
 
       {/* ── Section 4: Chaincode ─────────────────────────────────────────── */}
@@ -858,8 +885,8 @@ export default function ConfigureNetworkPage({ onBack, onConfigChange, initialCo
           <Field label="Version">
             <Input value={config.chaincode.version} onChange={v => updateChaincode('version', v)} placeholder="1.0" />
           </Field>
-          <Field label="Endorsement Policy" hint="leave blank to auto-derive from org policy">
-            <Input value={config.chaincode.endorsementPolicy} onChange={v => updateChaincode('endorsementPolicy', v)} placeholder="Auto-derived" />
+          <Field label="Endorsement Policy" hint="derived from the organisations">
+            <Input value={policy} onChange={() => {}} />
           </Field>
         </div>
         <div className="cn-field" style={{ marginTop: '14px' }}>
@@ -911,11 +938,11 @@ export default function ConfigureNetworkPage({ onBack, onConfigChange, initialCo
           </div>
           <div className="cn-stat">
             <span className="cn-stat-label">Policy</span>
-            <span className="cn-stat-value">{config.orderer.endorsementPolicy}</span>
+            <span className="cn-stat-value" title={policy}>{config.organizations.filter(o => o.enabled !== false && o.endorses).length} must sign</span>
           </div>
           <div className="cn-stat">
-            <span className="cn-stat-label">Files out</span>
-            <span className="cn-stat-value">7</span>
+            <span className="cn-stat-label">Insurer</span>
+            <span className="cn-stat-value">{insurer ? (insurer.enabled === false ? 'off' : 'on') : '—'}</span>
           </div>
         </div>
         <div className="cn-action-btns">
@@ -930,14 +957,46 @@ export default function ConfigureNetworkPage({ onBack, onConfigChange, initialCo
             Preview JSON
           </button>
           <button
-            className={`cn-btn cn-btn-accent ${generating ? 'disabled' : ''}`}
+            className="cn-btn cn-btn-secondary"
             onClick={handleGenerate}
             disabled={generating}
           >
-            {generating ? 'Generating…' : '⬇ Generate & Download'}
+            {generating ? 'Generating…' : '⬇ Download files'}
+          </button>
+          <button
+            className={`cn-btn cn-btn-accent ${saving ? 'disabled' : ''}`}
+            onClick={handleSave}
+            disabled={saving}
+          >
+            {saving ? 'Validating…' : '✓ Validate & Save'}
           </button>
         </div>
       </div>
+
+      {check && (
+        <div className={`cn-info`} style={{ margin: '16px 0', borderLeft: `4px solid ${check.ok ? '#16a34a' : '#dc2626'}` }}>
+          {check.ok ? (
+            <>
+              <strong>Saved and valid.</strong> {check.summary.network} · channel <code>{check.summary.channel}</code> ·
+              {' '}{check.summary.chaincode} · BatchTimeout {check.summary.batchTimeout} · ports on {check.summary.bindAddress}
+              <br />Endorsement policy <code>{check.summary.endorsementPolicy}</code>
+              <ul style={{ margin: '6px 0 0 18px' }}>
+                {check.summary.orgs.map(o => (
+                  <li key={o.mspId}>{o.label} — {o.mspId} ({o.type}{o.endorses ? ', endorses' : ''}): {o.users.map(u => `${u.name} [${u.role}]`).join(', ') || 'no identities'}</li>
+                ))}
+              </ul>
+              {check.summary.warnings.length > 0 && (
+                <ul style={{ margin: '6px 0 0 18px', color: '#92400e' }}>{check.summary.warnings.map(w => <li key={w}>{w}</li>)}</ul>
+              )}
+            </>
+          ) : (
+            <>
+              <strong>Fix these before deploying:</strong>
+              <ul style={{ margin: '6px 0 0 18px', color: '#991b1b' }}>{check.problems.map(p => <li key={p}>{p}</li>)}</ul>
+            </>
+          )}
+        </div>
+      )}
 
       {showJson && (
         <JsonModal json={buildNetworkConfigJson()} onClose={() => setShowJson(false)} />
