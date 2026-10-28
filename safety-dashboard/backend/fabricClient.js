@@ -13,7 +13,8 @@ const {
     PEER_ENDPOINT, PEER_HOST_OVERRIDE
 } = process.env;
 
-const TLS_CERT_PATH = path.join(
+// Written by generateConfigs.js into iinot-network/config/app.env (employer org peer).
+const TLS_CERT_PATH = process.env.TLS_CERT_PATH || path.join(
     IINOT_NETWORK_HOME,
     'organizations', 'peerOrganizations', 'iinot-industry.com',
     'peers', 'peer0.iinot-industry.com', 'tls', 'ca.crt'
