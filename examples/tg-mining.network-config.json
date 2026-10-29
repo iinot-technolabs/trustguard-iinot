@@ -1,0 +1,59 @@
+{
+  "_comment": "Second worked example: a different state and department with no IINoT names, different ports, two regulators and no insurer. Used by test T8 to prove that every name and port comes from the Network Designer.",
+  "network": {
+    "name": "Telangana Mining Safety Network",
+    "channel": "tg-mining-safety-channel",
+    "genesisProfile": "TGMiningGenesis",
+    "dockerNetworkName": "tgmining_net",
+    "bindAddress": "127.0.0.1",
+    "fabricVersion": "2.5.15",
+    "fabricCAVersion": "1.5.17"
+  },
+  "orderer": {
+    "mspId": "TGOrdererMSP",
+    "domain": "orderer.tg-mining-safety.in",
+    "port": 8050, "adminPort": 8053, "operationsPort": 8443,
+    "caPort": 8154, "caName": "ca-tg-orderer", "caFolderName": "tg-orderer",
+    "batchTimeout": "500ms", "maxMessageCount": 10,
+    "absoluteMaxBytes": "99 MB", "preferredMaxBytes": "512 KB"
+  },
+  "organizations": [
+    {
+      "id": "TGMineOperatorMSP", "name": "Mine Operator", "type": "employer", "endorses": true,
+      "domain": "operator.tg-mining-safety.in",
+      "peerPort": 8051, "chaincodePort": 8052, "operationsPort": 18051,
+      "caPort": 8254, "caName": "ca-tg-operator", "caFolderName": "tg-operator",
+      "roles": [
+        { "name": "gateway1",       "attrs": "role=gateway:ecert" },
+        { "name": "safetyofficer1", "attrs": "role=supervisor:ecert" }
+      ]
+    },
+    {
+      "id": "TGDGMSMSP", "name": "DGMS (Mines Safety)", "type": "regulator", "endorses": true,
+      "domain": "dgms.tg-mining-safety.in",
+      "peerPort": 8061, "chaincodePort": 8062, "operationsPort": 18061,
+      "caPort": 8354, "caName": "ca-tg-dgms", "caFolderName": "tg-dgms",
+      "roles": [
+        { "name": "inspector1", "attrs": "role=auditor:ecert" },
+        { "name": "weather1",   "attrs": "role=oracle:ecert" }
+      ]
+    },
+    {
+      "id": "TGLabourDeptMSP", "name": "Labour Department", "type": "regulator", "endorses": false,
+      "domain": "labour.tg-mining-safety.in",
+      "peerPort": 8071, "chaincodePort": 8072, "operationsPort": 18071,
+      "caPort": 8454, "caName": "ca-tg-labour", "caFolderName": "tg-labour",
+      "roles": [
+        { "name": "labourinspector1", "attrs": "role=auditor:ecert" }
+      ]
+    },
+    {
+      "id": "TGInsurerMSP", "name": "Insurer", "type": "insurer", "enabled": false,
+      "domain": "insurer.tg-mining-safety.in",
+      "peerPort": 8081, "chaincodePort": 8082, "operationsPort": 18081,
+      "caPort": 8554, "caName": "ca-tg-insurer", "caFolderName": "tg-insurer",
+      "roles": [ { "name": "claims1", "attrs": "role=claims-reviewer:ecert" } ]
+    }
+  ],
+  "chaincode": { "name": "minesafetycc", "version": "1.3", "sequence": 1, "path": "safety-chaincode", "lang": "node" }
+}

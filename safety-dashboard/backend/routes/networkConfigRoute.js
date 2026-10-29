@@ -1,54 +1,73 @@
+'use strict';
 /**
- * /api/network-config — GET + POST
- *
- * GET  → serves the canonical network-config.json from the VM
- *         so App.jsx can seed its state on page load / refresh
- *
- * POST → saves a new config (same path as generateConfigsRoute persists to)
- *         Used when App.jsx wants to persist state without triggering a download
- *
- * Wire up in server.js:
- *   const networkConfigRoute = require('./routes/networkConfigRoute');
- *   app.use('/api/network-config', networkConfigRoute);
+ * /api/network-config
+ *   GET            the saved Network Designer config (null if none yet)
+ *   POST           validate and save a config (400 with the list of problems if invalid)
+ *   POST /validate validate only; returns the derived summary the Deploy page shows
+ *                  (orgs, endorsement policy, chaincode label, warnings)
+ * Admin-only: mounted behind requireRole('admin') in server.js.
  */
-
 const express = require('express');
-const router  = express.Router();
 const fs      = require('fs');
 const path    = require('path');
+const { buildModel, ConfigError } = require('../lib/networkModel');
+const { CONFIG_FILE, TG_HOME } = require('../lib/paths');
 
-const CANONICAL_CONFIG = '/root/trustguard-iinot/iinot-network/config/network-config.json';
+const router = express.Router();
 
-// GET /api/network-config
+function summarize(m) {
+  return {
+    network: m.network.name,
+    channel: m.network.channel,
+    chaincode: m.chaincode.label,
+    sequence: m.chaincode.sequence,
+    endorsementPolicy: m.chaincode.policy,
+    batchTimeout: m.orderer.batchTimeout,
+    bindAddress: m.network.bindAddress,
+    orgs: m.orgs.map(o => ({ mspId: o.mspId, label: o.label, type: o.type, endorses: o.endorses,
+                             domain: o.domain, users: o.users })),
+    warnings: m.warnings,
+  };
+}
+
+function check(cfg) {
+  if (!cfg || typeof cfg !== 'object' || Array.isArray(cfg)) {
+    throw new ConfigError(['request body must be the network config object']);
+  }
+  return buildModel(cfg, { tgHome: TG_HOME });
+}
+
 router.get('/', (req, res) => {
   try {
-    if (!fs.existsSync(CANONICAL_CONFIG)) {
-      // No config saved yet — return empty so frontend uses its own defaults
-      return res.json(null);
-    }
-    const cfg = JSON.parse(fs.readFileSync(CANONICAL_CONFIG, 'utf8'));
-    res.json(cfg);
+    if (!fs.existsSync(CONFIG_FILE)) return res.json(null);
+    res.json(JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8')));
   } catch (err) {
-    console.error('[network-config] GET error:', err.message);
     res.status(500).json({ error: err.message });
   }
 });
 
-// POST /api/network-config  (body = full config object)
-router.post('/', (req, res) => {
-  const cfg = req.body;
-  if (!cfg || typeof cfg !== 'object') {
-    return res.status(400).json({ error: 'Request body must be a JSON object' });
-  }
+router.post('/validate', (req, res) => {
   try {
-    fs.mkdirSync(path.dirname(CANONICAL_CONFIG), { recursive: true });
-    fs.writeFileSync(CANONICAL_CONFIG, JSON.stringify(cfg, null, 2));
-    console.log('[network-config] Config saved to canonical path');
-    res.json({ ok: true });
+    res.json({ ok: true, summary: summarize(check(req.body)) });
   } catch (err) {
-    console.error('[network-config] POST error:', err.message);
-    res.status(500).json({ error: err.message });
+    if (err instanceof ConfigError) return res.status(400).json({ ok: false, problems: err.problems });
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+router.post('/', (req, res) => {
+  try {
+    const model = check(req.body);
+    fs.mkdirSync(path.dirname(CONFIG_FILE), { recursive: true });
+    const tmp = `${CONFIG_FILE}.tmp-${process.pid}`;
+    fs.writeFileSync(tmp, JSON.stringify(req.body, null, 2));
+    fs.renameSync(tmp, CONFIG_FILE);
+    res.json({ ok: true, summary: summarize(model) });
+  } catch (err) {
+    if (err instanceof ConfigError) return res.status(400).json({ ok: false, problems: err.problems });
+    res.status(500).json({ ok: false, error: err.message });
   }
 });
 
 module.exports = router;
+module.exports.summarize = summarize;

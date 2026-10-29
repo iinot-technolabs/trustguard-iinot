@@ -1,211 +1,136 @@
 'use strict';
-
-const crypto = require('crypto');
-const fs = require('fs');
-const path = require('path');
-const { v4: uuidv4 } = require('uuid');
+/**
+ * simulateEvent.js — end-to-end smoke test of a deployed TrustGuard network (test T5).
+ *
+ * Uses the app identities from the network config (one per role) and walks an incident
+ * through the safetycc 1.3 lifecycle, checking each role's permissions on the way:
+ *
+ *   gateway     LogIncidentWithContext (raw payload kept off-chain, SHA-256 on-chain)
+ *   supervisor  acknowledge → resolve GENUINE → reportable → record Form 18 hash
+ *   gateway     escalate a second, unacknowledged incident
+ *   oracle      SubmitOracleData (if the network has an oracle identity)
+ *   auditor     GetAllIncidents, GetComplianceScore, GetIncidentHistory
+ *   insurer     GetIncidentsByDevice allowed, GetAllIncidents refused (if an insurer exists)
+ *   negative    supervisor may not log incidents; gateway may not resolve
+ *
+ * Usage: node simulateEvent.js            exit code 0 = every check passed
+ * Writes only test incidents (ids SIM-…) and one test reading (site "sim-test").
+ */
+const crypto   = require('crypto');
 const Database = require('better-sqlite3');
-const grpc = require('@grpc/grpc-js');
+const grpc     = require('@grpc/grpc-js');
 const { connect, signers } = require('@hyperledger/fabric-gateway');
+const tg       = require('../common/tgnet');
 
-// Updated to point at iinot-network
-const IINOT_NETWORK_HOME = path.join(
-    process.env.HOME, 'fabric', 'iinot-network'
-);
+const deps = { grpc, connect, signers };
+const now = () => new Date().toISOString();
+const sha = s => crypto.createHash('sha256').update(s).digest('hex');
+const text = b => Buffer.from(b).toString('utf8');
+const errText = e => (e.details || []).map(d => d.message).join('; ') || e.message;
 
-const CHANNEL_NAME   = 'iinot-safety-channel';
-const CHAINCODE_NAME = 'safetycc';
-
-const PEER_ENDPOINT      = 'localhost:7051';
-const PEER_HOST_OVERRIDE = 'peer0.iinot-industry.com';
-
-// TLS cert for peer0.iinot-industry.com
-const TLS_CERT_PATH = path.join(
-    IINOT_NETWORK_HOME,
-    'organizations', 'peerOrganizations', 'iinot-industry.com',
-    'peers', 'peer0.iinot-industry.com', 'tls', 'ca.crt'
-);
-
-const WALLET_DIR = path.join(__dirname, 'wallet');
-const DB_PATH    = path.join(__dirname, 'offchain.db');
-
-function setupDatabase() {
-    const db = new Database(DB_PATH);
-    db.exec(`
-        CREATE TABLE IF NOT EXISTS raw_events (
-            incident_id   TEXT PRIMARY KEY,
-            device_id     TEXT NOT NULL,
-            event_type    TEXT NOT NULL,
-            raw_payload   TEXT NOT NULL,
-            payload_hash  TEXT NOT NULL,
-            received_at   TEXT NOT NULL
-        )
-    `);
-    return db;
+let passed = 0, failed = 0;
+async function check(name, fn) {
+  try { const r = await fn(); console.log(`  ✓ ${name}${typeof r === 'string' ? `  ${r}` : ''}`); passed++; }
+  catch (e) { console.log(`  ✗ ${name}: ${errText(e)}`); failed++; }
+}
+async function refused(name, fn, pattern) {
+  try { await fn(); console.log(`  ✗ ${name}: was allowed`); failed++; }
+  catch (e) {
+    const msg = errText(e);
+    if (pattern.test(msg)) { console.log(`  ✓ ${name} (refused)`); passed++; }
+    else { console.log(`  ✗ ${name}: refused for another reason: ${msg}`); failed++; }
+  }
 }
 
-async function connectAsIdentity(identityName, mspId) {
-    const certPath = path.join(WALLET_DIR, identityName, 'cert.pem');
-    const keyPath  = path.join(WALLET_DIR, identityName, 'key.pem');
-
-    const credentials = fs.readFileSync(certPath);
-    const privateKeyPem = fs.readFileSync(keyPath);
-    const privateKey = crypto.createPrivateKey(privateKeyPem);
-
-    const tlsRootCert = fs.readFileSync(TLS_CERT_PATH);
-    const tlsCredentials = grpc.credentials.createSsl(tlsRootCert);
-
-    const grpcClient = new grpc.Client(PEER_ENDPOINT, tlsCredentials, {
-        'grpc.ssl_target_name_override': PEER_HOST_OVERRIDE
-    });
-
-    const gateway = connect({
-        client: grpcClient,
-        identity: { mspId, credentials },
-        signer: signers.newPrivateKeySigner(privateKey)
-    });
-
-    return { gateway, grpcClient };
+function as(role, orgType) {
+  const id = tg.identityForRole(role, orgType);
+  if (!id) return null;
+  const c = tg.connect(id, deps);
+  c.id = id;
+  return c;
 }
 
 async function main() {
-    console.log('========================================');
-    console.log(' STEP 1: Simulating beacon SOS event');
-    console.log('========================================\n');
+  const net = tg.summary();
+  console.log(`Network: ${net.network} · channel ${net.channel} · ${net.chaincode} ${net.chaincodeVersion} · policy ${net.endorsementPolicy}\n`);
 
-    const incidentId = 'INC-' + uuidv4().slice(0, 8).toUpperCase();
-    const deviceId   = 'DEV-BEACON-001';
-    const eventType  = 'SOS';
-    const receivedAt = new Date().toISOString();
+  const gw  = as('gateway');
+  const sup = as('supervisor');
+  const aud = as('auditor');
+  const ora = as('oracle');
+  const ins = as('claims-reviewer');
+  if (!gw || !sup || !aud) throw new Error('The network needs identities with roles gateway, supervisor and auditor.');
+  console.log(`Identities: ${[gw, sup, aud, ora, ins].filter(Boolean).map(c => `${c.id.name}=${c.id.role}@${c.id.mspId}`).join(', ')}\n`);
 
-    const rawTtnPayload = {
-        end_device_ids: { device_id: deviceId },
-        received_at: receivedAt,
-        uplink_message: {
-            decoded_payload: {
-                sos: 1,
-                battery_pct: 87,
-                lat: 17.3850,
-                lng: 78.4867
-            },
-            rx_metadata: [{ gateway_id: 'gtw-iinot-01', rssi: -78 }]
-        }
-    };
+  const db = new Database(tg.offchainDb());
+  db.exec(`CREATE TABLE IF NOT EXISTS raw_events (incident_id TEXT PRIMARY KEY, device_id TEXT NOT NULL,
+           event_type TEXT NOT NULL, raw_payload TEXT NOT NULL, payload_hash TEXT NOT NULL, received_at TEXT NOT NULL)`);
 
-    const rawPayloadStr = JSON.stringify(rawTtnPayload);
-    console.log('Raw TTN payload received:');
-    console.log(rawPayloadStr, '\n');
+  const tag = crypto.randomBytes(3).toString('hex').toUpperCase();
+  const device = `sim-beacon-${tag.toLowerCase()}`;
+  const incA = `SIM-${tag}-A`, incB = `SIM-${tag}-B`;
+  const raw = JSON.stringify({ deviceId: device, wakeReason: 4, battery: 87, receivedAt: now(), simulated: true });
+  const hash = sha(raw);
+  db.prepare('INSERT INTO raw_events VALUES (?,?,?,?,?,?)').run(incA, device, 'SOS', raw, hash, now());
 
-    console.log('========================================');
-    console.log(' STEP 2: Storing raw payload off-chain (SQLite)');
-    console.log('========================================\n');
+  console.log('Gateway');
+  await check(`log ${incA} with context`, async () => {
+    await gw.contract.submitTransaction('LogIncidentWithContext', incA, device, 'SOS', hash, now(), '90',
+      JSON.stringify({ modelVersion: 'sim', featureHash: sha('sim'), factors: { simulated: 1 } }));
+  });
+  await check(`log ${incB}`, async () => {
+    await gw.contract.submitTransaction('LogIncident', incB, device, 'FALL', sha(raw + 'B'), now(), '85');
+  });
+  await check(`escalate ${incB} (unacknowledged)`, async () => {
+    const r = JSON.parse(text(await gw.contract.submitTransaction('EscalateIncident', incB, 'L1: not acknowledged (simulation)', now())));
+    return `status ${r.status}, level ${r.escalationLevel}`;
+  });
+  await refused('gateway may not resolve', () =>
+    gw.contract.submitTransaction('ResolveIncident', incA, 'GENUINE', 'x', now()), /denied|not allowed|cannot|role/i);
 
-    const db = setupDatabase();
-    const payloadHash = crypto.createHash('sha256').update(rawPayloadStr).digest('hex');
+  console.log('Supervisor');
+  await check('acknowledge', () => sup.contract.submitTransaction('UpdateIncidentStatus', incA, 'ACKNOWLEDGED', now()));
+  await check('resolve as GENUINE', () => sup.contract.submitTransaction('ResolveIncident', incA, 'GENUINE', 'Simulation: worker assisted', now()));
+  await check('mark reportable', () => sup.contract.submitTransaction('SetReportability', incA, 'REPORTABLE', 'Simulation', now()));
+  await check('record Form 18 hash', async () => {
+    const r = JSON.parse(text(await sup.contract.submitTransaction('RecordStatutoryReport', incA, 'FORM18', sha(`form18:${incA}`), now())));
+    return `${(r.statutoryReports || []).length} report(s) on record`;
+  });
+  await refused('supervisor may not log incidents', () =>
+    sup.contract.submitTransaction('LogIncident', `SIM-${tag}-X`, device, 'SOS', hash, now(), '50'), /denied|not allowed|cannot|role/i);
 
-    db.prepare(`
-        INSERT INTO raw_events
-            (incident_id, device_id, event_type, raw_payload, payload_hash, received_at)
-        VALUES (?, ?, ?, ?, ?, ?)
-    `).run(incidentId, deviceId, eventType, rawPayloadStr, payloadHash, receivedAt);
+  if (ora) {
+    console.log('Oracle');
+    await check('anchor a test reading', async () => {
+      const data = JSON.stringify({ siteId: 'sim-test', observedAt: now(), tempC: 30, humidityPct: 50, heatBand: 'CAUTION', simulated: true });
+      await ora.contract.submitTransaction('SubmitOracleData', 'sim-test', `sim-${tag}`, 'simulation', now(), sha(data), data);
+    });
+  } else console.log('Oracle: no identity with role oracle in this network — skipped');
 
-    console.log(`Stored in SQLite at: ${DB_PATH}`);
-    console.log(`incident_id : ${incidentId}`);
-    console.log(`payload_hash: ${payloadHash}\n`);
+  console.log('Auditor');
+  await check('read the incident', async () => {
+    const r = JSON.parse(text(await aud.contract.evaluateTransaction('GetIncident', incA)));
+    if (r.eventHash !== hash) throw new Error('on-chain hash differs from the off-chain payload');
+    return `${r.status}, outcome ${r.outcome}, hash matches off-chain payload`;
+  });
+  await check('list all incidents', async () => `${JSON.parse(text(await aud.contract.evaluateTransaction('GetAllIncidents'))).length} incidents`);
+  await check('history of the incident', async () => `${JSON.parse(text(await aud.contract.evaluateTransaction('GetIncidentHistory', incA))).length} ledger entries`);
+  await check('compliance score', async () => {
+    const r = JSON.parse(text(await aud.contract.evaluateTransaction('GetComplianceScore', new Date(Date.now() - 864e5).toISOString(), '', now())));
+    return `overall ${r.overall.score} (${r.overall.grade})`;
+  });
 
-    console.log('========================================');
-    console.log(' STEP 3: Gateway submits LogIncident to blockchain');
-    console.log('========================================\n');
+  if (ins) {
+    console.log('Insurer');
+    await check('incidents for one device', async () =>
+      `${JSON.parse(text(await ins.contract.evaluateTransaction('GetIncidentsByDevice', device, '', ''))).length} incident(s)`);
+    await refused('insurer may not list all incidents', () => ins.contract.evaluateTransaction('GetAllIncidents'), /denied|not allowed|cannot|role/i);
+  } else console.log('Insurer: not part of this network — skipped');
 
-    // Connect as gateway1 — IINoTIndustryMSP
-    const { gateway: gatewayConn, grpcClient: gwClient } =
-        await connectAsIdentity('gateway1', 'IINoTIndustryMSP');
-
-    try {
-        const network  = gatewayConn.getNetwork(CHANNEL_NAME);
-        const contract = network.getContract(CHAINCODE_NAME);
-
-        await contract.submitTransaction(
-            'LogIncident',
-            incidentId,
-            deviceId,
-            eventType,
-            payloadHash,
-            receivedAt,
-            '95'
-        );
-        console.log(`LogIncident committed to blockchain for ${incidentId}\n`);
-    } finally {
-        gatewayConn.close();
-        gwClient.close();
-    }
-
-    console.log('========================================');
-    console.log(' STEP 4: Supervisor acknowledges the incident');
-    console.log('========================================\n');
-
-    // Connect as supervisor1 — IINoTIndustryMSP
-    const { gateway: supConn, grpcClient: supClient } =
-        await connectAsIdentity('supervisor1', 'IINoTIndustryMSP');
-
-    try {
-        const network  = supConn.getNetwork(CHANNEL_NAME);
-        const contract = network.getContract(CHAINCODE_NAME);
-
-        await contract.submitTransaction(
-            'UpdateIncidentStatus',
-            incidentId,
-            'ACKNOWLEDGED',
-            new Date().toISOString()
-        );
-        console.log(`Status updated: TRIGGERED -> ACKNOWLEDGED\n`);
-
-        console.log('========================================');
-        console.log(' STEP 5: Supervisor resolves the incident');
-        console.log('========================================\n');
-
-        await contract.submitTransaction(
-            'UpdateIncidentStatus',
-            incidentId,
-            'RESOLVED',
-            new Date().toISOString()
-        );
-        console.log(`Status updated: ACKNOWLEDGED -> RESOLVED\n`);
-
-        console.log('========================================');
-        console.log(' STEP 6: Reading back final state from ledger');
-        console.log('========================================\n');
-
-        const resultBytes = await contract.evaluateTransaction(
-            'GetIncident', incidentId
-        );
-        const ledgerRecord = JSON.parse(
-            Buffer.from(resultBytes).toString('utf8')
-        );
-
-        console.log('--- ON-CHAIN record (from Fabric ledger) ---');
-        console.log(JSON.stringify(ledgerRecord, null, 2));
-
-    } finally {
-        supConn.close();
-        supClient.close();
-    }
-
-    console.log('\n--- OFF-CHAIN record (from local SQLite) ---');
-    const offchainRow = db
-        .prepare('SELECT * FROM raw_events WHERE incident_id = ?')
-        .get(incidentId);
-    console.log(JSON.stringify(offchainRow, null, 2));
-
-    console.log('\n========================================');
-    console.log(' Simulation complete.');
-    console.log(' Verify integrity: SHA-256 of raw_payload should equal eventHash on-chain.');
-    console.log('========================================');
-
-    db.close();
+  for (const c of [gw, sup, aud, ora, ins]) if (c) { c.gateway.close(); c.client.close(); }
+  db.close();
+  console.log(`\n${passed} passed, ${failed} failed`);
+  process.exit(failed ? 1 : 0);
 }
 
-main().catch(err => {
-    console.error('\nSimulation failed:', err);
-    process.exit(1);
-});
+main().catch(e => { console.error(`\nSmoke test could not run: ${errText(e)}`); process.exit(2); });

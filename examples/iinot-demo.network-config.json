@@ -1,0 +1,74 @@
+{
+  "_comment": "Kishore's live MVP network (trustguard-iinot-1) as a Network Designer config. Deploys fresh with the same names; differences from the live VM: chaincode safetycc 1.3 at sequence 1 (fresh install), BatchTimeout 500ms at genesis, insurer in the genesis block, ports on 127.0.0.1.",
+  "network": {
+    "name": "IINoT Lone Worker Safety Network",
+    "channel": "iinot-safety-channel",
+    "genesisProfile": "IINoTSafetyGenesis",
+    "dockerNetworkName": "iinot_network",
+    "bindAddress": "127.0.0.1",
+    "fabricVersion": "2.5.15",
+    "fabricCAVersion": "1.5.17"
+  },
+  "orderer": {
+    "mspId": "IINoTOrdererMSP",
+    "domain": "iinot-safety.com",
+    "port": 7050,
+    "adminPort": 7053,
+    "operationsPort": 9443,
+    "caPort": 9054,
+    "caName": "ca-iinot-orderer",
+    "caFolderName": "iinot-orderer",
+    "batchTimeout": "500ms",
+    "maxMessageCount": 10,
+    "absoluteMaxBytes": "99 MB",
+    "preferredMaxBytes": "512 KB"
+  },
+  "organizations": [
+    {
+      "id": "IINoTIndustryMSP",
+      "name": "Employer / Factory Owner",
+      "type": "employer",
+      "endorses": true,
+      "domain": "iinot-industry.com",
+      "peerPort": 7051, "chaincodePort": 7052, "operationsPort": 17051,
+      "caPort": 7054, "caName": "ca-iinot-industry", "caFolderName": "iinot-industry",
+      "roles": [
+        { "name": "gateway1",    "attrs": "role.gateway:ecert" },
+        { "name": "supervisor1", "attrs": "role.supervisor:ecert" }
+      ]
+    },
+    {
+      "id": "IINoTRegulatorMSP",
+      "name": "Inspector of Factories",
+      "type": "regulator",
+      "endorses": true,
+      "domain": "iinot-regulator.com",
+      "peerPort": 9051, "chaincodePort": 9052, "operationsPort": 19051,
+      "caPort": 8054, "caName": "ca-iinot-regulator", "caFolderName": "iinot-regulator",
+      "roles": [
+        { "name": "auditor1", "attrs": "role.auditor:ecert" },
+        { "name": "oracle1",  "attrs": "role.oracle:ecert" }
+      ]
+    },
+    {
+      "id": "IINoTInsurerMSP",
+      "name": "Insurer",
+      "type": "insurer",
+      "enabled": true,
+      "endorses": false,
+      "domain": "iinot-insurer.com",
+      "peerPort": 11051, "chaincodePort": 11052, "operationsPort": 21051,
+      "caPort": 10054, "caName": "ca-iinot-insurer", "caFolderName": "iinot-insurer",
+      "roles": [
+        { "name": "claims1", "attrs": "role.claims-reviewer:ecert" }
+      ]
+    }
+  ],
+  "chaincode": {
+    "name": "safetycc",
+    "version": "1.3",
+    "sequence": 1,
+    "path": "safety-chaincode",
+    "lang": "node"
+  }
+}

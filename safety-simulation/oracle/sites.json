@@ -1,0 +1,18 @@
+{
+  "_comment": "Example site (Visakhapatnam Steel Plant). Per client: copy to <install>/config/client/sites.json and list the client's sites and beacons. Sites watched by the oracle service (TG-014). Devices listed here are matched to this site's readings by the risk scoring.",
+  "sites": [
+    {
+      "siteId": "vsp-telecom",
+      "name": "Telecom Building, Visakhapatnam Steel Plant",
+      "latitude": 17.628806,
+      "longitude": 83.143083,
+      "devices": [
+        "loneworker-1",
+        "loneworker-2",
+        "loneworker-3",
+        "loneworker-4",
+        "loneworker-5"
+      ]
+    }
+  ]
+}

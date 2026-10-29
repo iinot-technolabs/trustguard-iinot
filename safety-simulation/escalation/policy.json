@@ -1,0 +1,37 @@
+{
+  "_comment": "Example policy. Per client: copy to <install>/config/client/policy.json (install.sh does this and sets dashboardUrl), then edit. Auto-escalation policy (TG-016). An incident climbs one level per step while it stays TRIGGERED/ESCALATED (not acknowledged). Each step is an EscalateIncident transaction on the ledger.",
+  "scanIntervalSec": 15,
+  "maxAgeHours": 24,
+  "notifyNewWithinMinutes": 10,
+  "levels": [
+    {
+      "level": 1,
+      "afterMinutes": 5,
+      "reason": "Unacknowledged for 5 min — supervisors alerted",
+      "notify": [
+        "supervisors"
+      ]
+    },
+    {
+      "level": 2,
+      "afterMinutes": 15,
+      "reason": "Unacknowledged for 15 min — site safety officer alerted",
+      "notify": [
+        "supervisors",
+        "safetyOfficer"
+      ]
+    },
+    {
+      "level": 3,
+      "afterMinutes": 240,
+      "minRisk": 90,
+      "reason": "High-risk incident unacknowledged for 4 h — regulator intimation due (Factories Act s.88)",
+      "notify": [
+        "supervisors",
+        "safetyOfficer",
+        "regulator"
+      ]
+    }
+  ],
+  "dashboardUrl": "http://localhost/"
+}

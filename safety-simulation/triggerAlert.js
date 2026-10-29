@@ -7,15 +7,9 @@ const { v4: uuidv4 } = require('uuid');
 const Database = require('better-sqlite3');
 const grpc = require('@grpc/grpc-js');
 const { connect, signers } = require('@hyperledger/fabric-gateway');
+const tg = require('../common/tgnet');   // network, identities, paths from the deployed config
 
-const IINOT_NETWORK_HOME = path.join(process.env.HOME, 'fabric', 'iinot-network');
-const WALLET_DIR = path.join(__dirname, 'wallet');
-const DB_PATH    = path.join(__dirname, 'offchain.db');
-const TLS_CERT_PATH = path.join(
-    IINOT_NETWORK_HOME,
-    'organizations', 'peerOrganizations', 'iinot-industry.com',
-    'peers', 'peer0.iinot-industry.com', 'tls', 'ca.crt'
-);
+const DB_PATH    = tg.offchainDb();
 
 // Accept event type as argument: node triggerAlert.js SOS
 // Defaults to SOS if not specified
@@ -59,24 +53,10 @@ async function main() {
     db.close();
 
     // Submit to blockchain as gateway1
-    const credentials = fs.readFileSync(path.join(WALLET_DIR, 'gateway1', 'cert.pem'));
-    const privateKey  = crypto.createPrivateKey(
-        fs.readFileSync(path.join(WALLET_DIR, 'gateway1', 'key.pem'))
-    );
-    const tlsRootCert = fs.readFileSync(TLS_CERT_PATH);
-    const grpcClient  = new grpc.Client(
-        'localhost:7051',
-        grpc.credentials.createSsl(tlsRootCert),
-        { 'grpc.ssl_target_name_override': 'peer0.iinot-industry.com' }
-    );
-    const gateway = connect({
-        client: grpcClient,
-        identity: { mspId: 'IINoTIndustryMSP', credentials },
-        signer: signers.newPrivateKeySigner(privateKey)
-    });
+    const { gateway, client: grpcClient } = tg.connect(tg.identityForRole('gateway'), { grpc, connect, signers });
 
     try {
-        const contract = gateway.getNetwork('iinot-safety-channel').getContract('safetycc');
+        const contract = gateway.getNetwork(tg.load().network.channel).getContract(tg.load().chaincode.name);
         await contract.submitTransaction(
             'LogIncident', incidentId, deviceId, eventType,
             payloadHash, receivedAt, '95'

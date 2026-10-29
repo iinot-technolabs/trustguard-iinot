@@ -1,101 +1,86 @@
 #!/bin/bash
-# config-reader.sh — Phase 4 config shim
-# Sources network-config.json and exports all shell variables
-# used by network.sh and registerEnroll.sh.
+# config-reader.sh — loads the derived network model into shell variables.
 #
-# Requires: jq
-# Usage (from network.sh): . scripts/config-reader.sh
+# Source from iinot-network/ (network.sh does this):   . scripts/config-reader.sh
 #
-# Exported variables:
-#   CHANNEL_NAME          — channel name
-#   CC_NAME               — chaincode name
-#   CC_PATH               — chaincode path (absolute)
-#   CC_LANG               — chaincode language (default: node)
-#   NETWORK_NAME          — human name for logging
-#   ORDERER_DOMAIN        — e.g. iinot-safety.com
-#   ORDERER_MSPID         — e.g. IINoTOrdererMSP
-#   ORDERER_CA_PORT       — e.g. 9054
-#   ORDERER_PORT          — e.g. 7050
-#   ORDERER_ADMIN_PORT    — e.g. 7053
-#   ORG_COUNT             — number of peer orgs
-#   ORG_NAMES[]           — array of org short names (slugs), e.g. ("industry" "regulator")
-#   ORG_DOMAINS[]         — array of org domains,      e.g. ("iinot-industry.com" "iinot-regulator.com")
-#   ORG_MSPIDS[]          — array of MSP IDs,          e.g. ("IINoTIndustryMSP" "IINoTRegulatorMSP")
-#   ORG_CA_NAMES[]        — array of CA names,         e.g. ("ca-iinot-industry" "ca-iinot-regulator")
-#   ORG_CA_PORTS[]        — array of CA ports,         e.g. (7054 8054)
-#   ORG_PEER_PORTS[]      — array of peer ports,       e.g. (7051 9051)
-#   ORG_CHAINCODE_PORTS[] — array of chaincode ports,  e.g. (7052 9052)
-#   ORG_OPS_PORTS[]       — array of operations ports, e.g. (17051 19051)
-#   ORG_USERS[][]         — per-org user list (stored as ORG_USERS_<slug>)
+# Reads config/network.derived.json, which generateConfigs.js writes from the
+# Network Designer's config/network-config.json. No names, ports or paths are
+# hard-coded here: every value below comes from that file.
+#
+# Scalars:  NETWORK_NAME CHANNEL_NAME GENESIS_PROFILE DOCKER_NETWORK BIND_ADDRESS
+#           CC_NAME CC_VERSION CC_SEQUENCE CC_LABEL CC_PATH CC_LANG CC_POLICY
+#           ORDERER_MSPID ORDERER_DOMAIN ORDERER_HOST ORDERER_PORT ORDERER_ADMIN_PORT
+#           ORDERER_CA_NAME ORDERER_CA_SLUG ORDERER_CA_PORT
+#           WALLET_DIR SECRETS_FILE COMPOSE_ENV ORG_COUNT
+# Arrays (index = org):  ORG_LABELS ORG_TYPES ORG_MSPIDS ORG_DOMAINS ORG_PEER_HOSTS
+#           ORG_PEER_PORTS ORG_CHAINCODE_PORTS ORG_OPS_PORTS ORG_CA_NAMES ORG_CA_SLUGS
+#           ORG_CA_PORTS ORG_ENDORSES ORG_USERS ("name:role name:role")
 
-CONFIG_FILE="${PWD}/config/network-config.json"
-
-if [ ! -f "${CONFIG_FILE}" ]; then
-    echo "[ERROR] network-config.json not found at ${CONFIG_FILE}"
-    echo "[ERROR] Run Network Designer in the dashboard first, then click Deploy."
-    exit 1
-fi
+DERIVED_FILE="${PWD}/config/network.derived.json"
 
 if ! command -v jq &>/dev/null; then
-    echo "[ERROR] jq is required but not installed. Run: apt-get install -y jq"
-    exit 1
+    echo "[ERROR] jq is required: apt-get install -y jq" >&2
+    return 1 2>/dev/null || exit 1
+fi
+if [ ! -f "${DERIVED_FILE}" ]; then
+    echo "[ERROR] ${DERIVED_FILE} not found." >&2
+    echo "[ERROR] Save the network in the Network Designer, or run: ./scripts/network.sh generate" >&2
+    return 1 2>/dev/null || exit 1
 fi
 
-# ── Top-level fields ──────────────────────────────────────────
-export NETWORK_NAME=$(jq -r '.network.name // "IINoT Network"' "${CONFIG_FILE}")
-export CHANNEL_NAME=$(jq -r '.network.channel // "iinot-safety-channel"' "${CONFIG_FILE}")
-export CC_NAME=$(jq -r '.chaincode.name // "safetycc"' "${CONFIG_FILE}")
-export CC_LANG=$(jq -r '.chaincode.lang // "node"' "${CONFIG_FILE}")
+_j() { jq -r "$1" "${DERIVED_FILE}"; }
 
-# Chaincode path: absolute if starts with /, else relative to $HOME/fabric/
-_CC_PATH_RAW=$(jq -r '.chaincode.path // "safety-chaincode"' "${CONFIG_FILE}")
-if [[ "${_CC_PATH_RAW}" == /* ]]; then
-    export CC_PATH="${_CC_PATH_RAW}"
-else
-    export CC_PATH="${HOME}/trustguard-iinot/${_CC_PATH_RAW}"
-fi
+NETWORK_NAME="$(_j .network.name)"
+CHANNEL_NAME="$(_j .network.channel)"
+GENESIS_PROFILE="$(_j .network.genesisProfile)"
+DOCKER_NETWORK="$(_j .network.dockerNetwork)"
+BIND_ADDRESS="$(_j .network.bindAddress)"
 
-# ── Orderer org ───────────────────────────────────────────────
-export ORDERER_DOMAIN=$(jq -r '.orderer.domain // "iinot-safety.com"' "${CONFIG_FILE}")
-export ORDERER_MSPID=$(jq -r '.orderer.mspId // "IINoTOrdererMSP"' "${CONFIG_FILE}")
-export ORDERER_CA_PORT=$(jq -r '.orderer.caPort // 9054' "${CONFIG_FILE}")
-export ORDERER_PORT=$(jq -r '.orderer.port // 7050' "${CONFIG_FILE}")
-export ORDERER_ADMIN_PORT=$(jq -r '.orderer.adminPort // 7053' "${CONFIG_FILE}")
-export ORDERER_CA_NAME=$(jq -r '.orderer.caName // "ca-iinot-orderer"' "${CONFIG_FILE}")
-export ORDERER_CA_SLUG=$(jq -r '.orderer.caSlug // "orderer"' "${CONFIG_FILE}")
+CC_NAME="$(_j .chaincode.name)"
+CC_VERSION="$(_j .chaincode.version)"
+CC_SEQUENCE="$(_j .chaincode.sequence)"
+CC_LABEL="$(_j .chaincode.label)"
+CC_PATH="$(_j .chaincode.path)"
+CC_LANG="$(_j .chaincode.lang)"
+CC_POLICY="$(_j .chaincode.policy)"
 
-# ── Peer orgs — build parallel arrays ─────────────────────────
-export ORG_COUNT=$(jq '.organizations | length' "${CONFIG_FILE}")
+ORDERER_MSPID="$(_j .orderer.mspId)"
+ORDERER_DOMAIN="$(_j .orderer.domain)"
+ORDERER_HOST="$(_j .orderer.host)"
+ORDERER_PORT="$(_j .orderer.port)"
+ORDERER_ADMIN_PORT="$(_j .orderer.adminPort)"
+ORDERER_CA_NAME="$(_j .orderer.caName)"
+ORDERER_CA_SLUG="$(_j .orderer.caSlug)"
+ORDERER_CA_PORT="$(_j .orderer.caPort)"
 
-# Bash arrays (bash 4+, available on all Linux targets)
-ORG_NAMES=()
-ORG_DOMAINS=()
-ORG_MSPIDS=()
-ORG_CA_NAMES=()
-ORG_CA_SLUGS=()
-ORG_CA_PORTS=()
-ORG_PEER_PORTS=()
-ORG_CHAINCODE_PORTS=()
-ORG_OPS_PORTS=()
+WALLET_DIR="$(_j .paths.wallet)"
+SECRETS_FILE="${PWD}/config/secrets/secrets.json"
+COMPOSE_ENV="${PWD}/config/secrets/compose.env"
 
-for i in $(seq 0 $((ORG_COUNT - 1))); do
-    ORG_NAMES+=("$(jq -r ".organizations[$i].name" "${CONFIG_FILE}")")
-    ORG_DOMAINS+=("$(jq -r ".organizations[$i].domain" "${CONFIG_FILE}")")
-    ORG_MSPIDS+=("$(jq -r ".organizations[$i].id" "${CONFIG_FILE}")")
-    ORG_CA_NAMES+=("$(jq -r ".organizations[$i].caName" "${CONFIG_FILE}")")
-    ORG_CA_SLUGS+=("$(jq -r ".organizations[$i].caFolderName" "${CONFIG_FILE}")")
-    ORG_CA_PORTS+=("$(jq -r ".organizations[$i].caPort" "${CONFIG_FILE}")")
-    ORG_PEER_PORTS+=("$(jq -r ".organizations[$i].peerPort" "${CONFIG_FILE}")")
-    ORG_CHAINCODE_PORTS+=("$(jq -r ".organizations[$i].chaincodePort" "${CONFIG_FILE}")")
-    ORG_OPS_PORTS+=("$(jq -r ".organizations[$i].operationsPort" "${CONFIG_FILE}")")
+ORG_COUNT="$(_j '.orgs | length')"
+ORG_LABELS=(); ORG_TYPES=(); ORG_MSPIDS=(); ORG_DOMAINS=(); ORG_PEER_HOSTS=()
+ORG_PEER_PORTS=(); ORG_CHAINCODE_PORTS=(); ORG_OPS_PORTS=()
+ORG_CA_NAMES=(); ORG_CA_SLUGS=(); ORG_CA_PORTS=(); ORG_ENDORSES=(); ORG_USERS=()
 
-    # Store per-org users as a colon-separated env var so it survives export
-    # Format: "username:role username2:role2"
-    _USERS=$(jq -r ".organizations[$i].roles[]? | \"\(.name):\(.attrs)\"" "${CONFIG_FILE}" | tr '\n' ' ')
-    export "ORG_USERS_${ORG_MSPIDS[$i]}"="${_USERS}"
-done
+while IFS=$'\t' read -r label type msp domain host pport ccport ops caname caslug caport endorses users; do
+    ORG_LABELS+=("${label}");   ORG_TYPES+=("${type}");      ORG_MSPIDS+=("${msp}")
+    ORG_DOMAINS+=("${domain}"); ORG_PEER_HOSTS+=("${host}")
+    ORG_PEER_PORTS+=("${pport}"); ORG_CHAINCODE_PORTS+=("${ccport}"); ORG_OPS_PORTS+=("${ops}")
+    ORG_CA_NAMES+=("${caname}"); ORG_CA_SLUGS+=("${caslug}"); ORG_CA_PORTS+=("${caport}")
+    ORG_ENDORSES+=("${endorses}"); ORG_USERS+=("${users}")
+done < <(jq -r '.orgs[] | [.label, .type, .mspId, .domain, .peerHost, .peerPort, .chaincodePort,
+                           .opsPort, .caName, .caSlug, .caPort, (.endorses|tostring),
+                           ([.users[] | "\(.name):\(.role)"] | join(" "))] | @tsv' "${DERIVED_FILE}")
 
-export ORG_NAMES ORG_DOMAINS ORG_MSPIDS ORG_CA_NAMES ORG_CA_SLUGS
-export ORG_CA_PORTS ORG_PEER_PORTS ORG_CHAINCODE_PORTS ORG_OPS_PORTS
+# Read one secret by jq path, e.g.  secret '.ca["iinot-industry"]'
+secret() {
+    local v
+    v="$(jq -r "$1 // empty" "${SECRETS_FILE}" 2>/dev/null)"
+    if [ -z "${v}" ]; then
+        echo "[ERROR] missing secret $1 in ${SECRETS_FILE}; run ./scripts/network.sh generate" >&2
+        return 1
+    fi
+    printf '%s' "${v}"
+}
 
-echo "[INFO] Config loaded: ${NETWORK_NAME} | channel=${CHANNEL_NAME} | orgs=${ORG_COUNT} | cc=${CC_NAME}"
+echo "[INFO] Config loaded: ${NETWORK_NAME} | channel=${CHANNEL_NAME} | orgs=${ORG_COUNT} (${ORG_MSPIDS[*]}) | ${CC_LABEL} seq ${CC_SEQUENCE} | policy ${CC_POLICY}"

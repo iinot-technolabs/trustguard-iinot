@@ -1,180 +1,118 @@
-// backend/routes/deploy.js — Phase 4 update
-// Adds: generateConfigs step before network.sh all
-// so docker-compose.yaml and configtx.yaml are regenerated from current JSON.
-
+'use strict';
+/**
+ * /api/deploy — run network.sh from the dashboard and stream its log (SSE).
+ *
+ *   POST   /api/deploy          { networkConfig?, mode? }  mode: all | channel | deploy | identities | status
+ *                                networkConfig (optional) is validated and saved first; "all" regenerates
+ *                                compose, configtx, app.env and secrets from it.
+ *   POST   /api/deploy/enroll   enrol the app users into the wallet (= mode "identities")
+ *   GET    /api/deploy/stream   SSE: event "log" {line}, "status" {running, exitCode}, "done" {exitCode}
+ *   GET    /api/deploy/status   last 100 log lines and state
+ *   DELETE /api/deploy          abort the running job
+ *
+ * "down" is deliberately not exposed: deleting a network is a shell-only action.
+ * Admin-only: mounted behind requireRole('admin') in server.js.
+ */
 const express = require('express');
-const router  = express.Router();
 const fs      = require('fs');
 const path    = require('path');
 const { spawn } = require('child_process');
+const { buildModel, ConfigError } = require('../lib/networkModel');
+const { TG_HOME, NETWORK_ROOT, FABRIC_BIN, CONFIG_FILE, NETWORK_SCRIPT } = require('../lib/paths');
 
-// ── Paths ─────────────────────────────────────────────────────
-const NETWORK_ROOT   = '/root/trustguard-iinot/iinot-network';
-const CONFIG_FILE    = path.join(NETWORK_ROOT, 'config/network-config.json');
-const NETWORK_SCRIPT = path.join(NETWORK_ROOT, 'scripts/network.sh');
-// generateConfigs.js lives in the dashboard backend's lib/ folder
-// and writes docker-compose.yaml + configtx.yaml into NETWORK_ROOT
-const GEN_CONFIGS_SCRIPT = path.join(__dirname, '../lib/generateConfigs.js');
+const router = express.Router();
+const MODES = ['all', 'channel', 'deploy', 'identities', 'status'];
 
-// ── In-memory deploy state ────────────────────────────────────
-let deployState = {
-  running:   false,
-  pid:       null,
-  startedAt: null,
-  exitCode:  null,
-  logLines:  [],
-};
-let activeClients = [];
+let state = { running: false, pid: null, mode: null, startedAt: null, exitCode: null, logLines: [] };
+let clients = [];
 
 function broadcast(event, data) {
   const payload = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
-  activeClients.forEach(res => {
-    try { res.write(payload); } catch (_) {}
-  });
+  clients.forEach(res => { try { res.write(payload); } catch (_) { /* client gone */ } });
+}
+
+// Strip ANSI colour codes and anything that looks like a credential in a URL.
+function clean(line) {
+  return line.replace(/\x1b\[[0-9;]*m/g, '').replace(/(https?:\/\/)[^:@\/\s]+:[^@\s]+@/g, '$1***:***@');
 }
 
 function addLog(line) {
-  deployState.logLines.push(line);
-  // Cap buffer at 2000 lines
-  if (deployState.logLines.length > 2000) {
-    deployState.logLines = deployState.logLines.slice(-1500);
-  }
-  broadcast('log', { line });
+  const l = clean(line);
+  state.logLines.push(l);
+  if (state.logLines.length > 2000) state.logLines = state.logLines.slice(-1500);
+  broadcast('log', { line: l });
 }
 
-// ── POST /api/deploy ──────────────────────────────────────────
-// Body: { networkConfig: <object>, mode: 'all' | 'channel' | 'deploy' }
-router.post('/', async (req, res) => {
-  if (deployState.running) {
-    return res.status(409).json({ error: 'Deployment already in progress' });
-  }
+function start(mode, res) {
+  state = { running: true, pid: null, mode, startedAt: new Date().toISOString(), exitCode: null, logLines: [] };
+  broadcast('status', { running: true, mode, startedAt: state.startedAt });
+  res.json({ ok: true, mode, startedAt: state.startedAt });
 
-  const { networkConfig, mode = 'all' } = req.body;
-  if (!networkConfig) {
-    return res.status(400).json({ error: 'networkConfig is required' });
-  }
-
-  // Write config file
-  try {
-    fs.mkdirSync(path.dirname(CONFIG_FILE), { recursive: true });
-    fs.writeFileSync(CONFIG_FILE, JSON.stringify(networkConfig, null, 2));
-  } catch (err) {
-    return res.status(500).json({ error: `Failed to write config: ${err.message}` });
-  }
-
-  // Reset state
-  deployState = { running: true, pid: null, startedAt: new Date().toISOString(), exitCode: null, logLines: [] };
-  broadcast('status', { running: true, startedAt: deployState.startedAt });
-
-  res.json({ ok: true, startedAt: deployState.startedAt });
-
-  // ── Step 1: regenerate docker-compose.yaml + configtx.yaml ──
-  addLog('[INFO] Generating docker-compose.yaml and configtx.yaml from network config...');
-
-  let genError = null;
-  try {
-    await new Promise((resolve, reject) => {
-      const gen = spawn(process.execPath, [GEN_CONFIGS_SCRIPT, CONFIG_FILE, NETWORK_ROOT], {
-        cwd: NETWORK_ROOT,
-        env: { ...process.env },
-      });
-      gen.stdout.on('data', d => d.toString().split('\n').filter(Boolean).forEach(addLog));
-      gen.stderr.on('data', d => d.toString().split('\n').filter(Boolean).forEach(l => addLog(`[WARN] ${l}`)));
-      gen.on('close', code => {
-        if (code === 0) resolve();
-        else reject(new Error(`generateConfigs exited ${code}`));
-      });
-    });
-    addLog('[INFO] Config files generated successfully.');
-  } catch (err) {
-    genError = err.message;
-    addLog(`[ERROR] generateConfigs failed: ${err.message}`);
-    addLog('[ERROR] Aborting deployment.');
-    deployState.running  = false;
-    deployState.exitCode = 1;
-    broadcast('status', { running: false, exitCode: 1 });
-    broadcast('done', { exitCode: 1 });
-    return;
-  }
-
-  // ── Step 2: run network.sh ───────────────────────────────────
-  addLog(`[INFO] Starting network.sh ${mode}...`);
-
+  addLog(`[INFO] network.sh ${mode} (${NETWORK_ROOT})`);
   const proc = spawn('bash', [NETWORK_SCRIPT, mode], {
     cwd: NETWORK_ROOT,
-    env: { ...process.env, HOME: '/root', PATH: `/root/trustguard-iinot/bin:${process.env.PATH}` },
+    env: { ...process.env, TG_HOME, FABRIC_BIN, NODE_BIN: process.execPath,
+           PATH: `${FABRIC_BIN}:${process.env.PATH}` },
+    stdio: ['ignore', 'pipe', 'pipe'],
   });
-
-  deployState.pid = proc.pid;
-
-  proc.stdout.on('data', data => {
-    data.toString().split('\n').filter(Boolean).forEach(addLog);
-  });
-  proc.stderr.on('data', data => {
-    data.toString().split('\n').filter(Boolean).forEach(l => addLog(`[stderr] ${l}`));
-  });
+  state.pid = proc.pid;
+  const pipe = prefix => data => data.toString().split('\n').filter(Boolean).forEach(l => addLog(prefix + l));
+  proc.stdout.on('data', pipe(''));
+  proc.stderr.on('data', pipe('[stderr] '));
   proc.on('close', code => {
-    deployState.running  = false;
-    deployState.exitCode = code;
-    deployState.pid      = null;
-    const msg = code === 0
-      ? `[SUCCESS] Deployment complete. Network is ready.`
-      : `[ERROR] network.sh exited with code ${code}`;
-    addLog(msg);
+    state.running = false; state.exitCode = code; state.pid = null;
+    addLog(code === 0 ? `[SUCCESS] network.sh ${mode} finished.` : `[ERROR] network.sh ${mode} exited with code ${code}`);
     broadcast('status', { running: false, exitCode: code });
     broadcast('done', { exitCode: code });
   });
+}
+
+router.post('/', (req, res) => {
+  if (state.running) return res.status(409).json({ error: `network.sh ${state.mode} is already running` });
+  const { networkConfig, mode = 'all' } = req.body || {};
+  if (!MODES.includes(mode)) return res.status(400).json({ error: `mode must be one of ${MODES.join(', ')}` });
+
+  if (networkConfig) {
+    try {
+      buildModel(networkConfig, { tgHome: TG_HOME });           // validate before touching anything
+      fs.mkdirSync(path.dirname(CONFIG_FILE), { recursive: true });
+      fs.writeFileSync(CONFIG_FILE, JSON.stringify(networkConfig, null, 2));
+    } catch (err) {
+      if (err instanceof ConfigError) return res.status(400).json({ ok: false, problems: err.problems });
+      return res.status(500).json({ ok: false, error: `Failed to save config: ${err.message}` });
+    }
+  } else if (!fs.existsSync(CONFIG_FILE)) {
+    return res.status(400).json({ ok: false, problems: ['no network config saved yet: design the network first'] });
+  }
+  start(mode, res);
 });
 
-// ── GET /api/deploy/stream (SSE) ──────────────────────────────
+router.post('/enroll', (req, res) => {
+  if (state.running) return res.status(409).json({ error: `network.sh ${state.mode} is already running` });
+  start('identities', res);
+});
+
 router.get('/stream', (req, res) => {
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache');
   res.setHeader('Connection', 'keep-alive');
   res.flushHeaders();
-
-  // Replay buffered log to reconnecting client
-  deployState.logLines.forEach(line => {
-    res.write(`event: log\ndata: ${JSON.stringify({ line })}\n\n`);
-  });
-  if (!deployState.running) {
-    res.write(`event: status\ndata: ${JSON.stringify({ running: false, exitCode: deployState.exitCode })}\n\n`);
-  }
-
-  activeClients.push(res);
-
-  const keepAlive = setInterval(() => {
-    try { res.write(': ping\n\n'); } catch (_) {}
-  }, 20000);
-
-  req.on('close', () => {
-    clearInterval(keepAlive);
-    activeClients = activeClients.filter(c => c !== res);
-  });
+  state.logLines.forEach(line => res.write(`event: log\ndata: ${JSON.stringify({ line })}\n\n`));
+  if (!state.running) res.write(`event: status\ndata: ${JSON.stringify({ running: false, exitCode: state.exitCode })}\n\n`);
+  clients.push(res);
+  const keepAlive = setInterval(() => { try { res.write(': ping\n\n'); } catch (_) { /* gone */ } }, 20000);
+  req.on('close', () => { clearInterval(keepAlive); clients = clients.filter(c => c !== res); });
 });
 
-// ── GET /api/deploy/status ────────────────────────────────────
 router.get('/status', (req, res) => {
-  res.json({
-    running:   deployState.running,
-    pid:       deployState.pid,
-    startedAt: deployState.startedAt,
-    exitCode:  deployState.exitCode,
-    logLines:  deployState.logLines.slice(-100),
-  });
+  res.json({ running: state.running, mode: state.mode, pid: state.pid, startedAt: state.startedAt,
+             exitCode: state.exitCode, logLines: state.logLines.slice(-100) });
 });
 
-// ── DELETE /api/deploy (abort) ────────────────────────────────
 router.delete('/', (req, res) => {
-  if (!deployState.running || !deployState.pid) {
-    return res.status(400).json({ error: 'No deployment running' });
-  }
-  try {
-    process.kill(deployState.pid, 'SIGTERM');
-    res.json({ ok: true, message: 'SIGTERM sent' });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
+  if (!state.running || !state.pid) return res.status(400).json({ error: 'Nothing is running' });
+  try { process.kill(state.pid, 'SIGTERM'); res.json({ ok: true, message: 'SIGTERM sent' }); }
+  catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 module.exports = router;

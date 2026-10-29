@@ -601,3 +601,6 @@
 }
 .cn-btn-accent:hover:not(:disabled) { background: #01a884; }
 .cn-btn-accent:disabled { opacity: 0.6; cursor: not-allowed; }
+
+/* Inline code in info boxes and the validation summary: readable in light and dark browser themes. */
+.cn-info code { color: #0f172a; background: #e2e8f0; padding: 1px 5px; border-radius: 4px; font-size: 12px; }

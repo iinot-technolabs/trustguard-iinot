@@ -6,3 +6,20 @@ iinot-network/bin/
 iinot-network/config/
 iinot-network/organizations/
 iinot-network/channel-artifacts/
+
+# Generated per deployment by network.sh / generateConfigs.js (see docs/NETWORK_CONFIG.md)
+wallet/
+iinot-network/configtx.yaml
+iinot-network/docker/docker-compose.yaml
+iinot-network/channel-artifacts/
+bin/
+install.log
+*.tar.gz
+.tg-backup/
+
+# Per-client settings and runtime data (created by install.sh / the services)
+config/client/
+safety-simulation/escalation/.env
+safety-simulation/offchain.db*
+safety-dashboard/backend/users.json
+safety-dashboard/backend/data/
