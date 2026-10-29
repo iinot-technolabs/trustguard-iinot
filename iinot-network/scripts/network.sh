@@ -80,6 +80,11 @@ runtimeDown() {
         docker images -q --filter "reference=dev-${ORG_PEER_HOSTS[$i]}-*" | xargs -r docker rmi -f
     done
 }
+runtimeRestartPeer() {   # restart one peer container and wait until it answers again
+    docker restart "$1" >/dev/null
+    local i; for i in $(seq 1 20); do peer channel list >/dev/null 2>&1 && return 0; sleep 2; done
+    return 1
+}
 if [ -n "${TG_RUNTIME_SHIM}" ]; then
     # shellcheck source=/dev/null
     . "${TG_RUNTIME_SHIM}"
@@ -179,6 +184,7 @@ deployChaincode() {
     if committedSequence; then
         infoln "Sequence ${CC_SEQUENCE} of ${CC_NAME} is already committed; verifying only."
         verifyCommitted
+        launchChaincode
         return
     fi
 
@@ -205,6 +211,7 @@ deployChaincode() {
     retry 3 5 peer lifecycle chaincode commit "${OFLAGS[@]}" "${DEF[@]}" "${PEERFLAGS[@]}"
 
     verifyCommitted
+    launchChaincode
     successln "Chaincode ${CC_NAME} ${CC_VERSION} committed on '${CHANNEL_NAME}' with ${CC_POLICY}."
 }
 
@@ -219,6 +226,33 @@ committedSequence() {   # success if CC_SEQUENCE (or later) is already committed
     local s
     s="$(peer lifecycle chaincode querycommitted --channelID "${CHANNEL_NAME}" --name "${CC_NAME}" --output json 2>/dev/null | jq -r '.sequence // 0')"
     [ -n "${s}" ] && [ "${s}" -ge "${CC_SEQUENCE}" ]
+}
+
+# Start the chaincode on every peer now, so a peer that cannot run it fails the deploy
+# instead of the first real transaction. Uses the contract's built-in metadata query
+# (no role needed). Seen on Docker's containerd image store: a peer reported the image
+# built at install but it was missing at launch; restarting the peer rebuilds it.
+launchChaincode() {
+    local i out attempt
+    for i in $(seq 0 $((ORG_COUNT - 1))); do
+        setPeerEnv "${i}"
+        for attempt in 1 2 3; do
+            if out=$(peer chaincode query -C "${CHANNEL_NAME}" -n "${CC_NAME}" \
+                     -c '{"Args":["org.hyperledger.fabric:GetMetadata"]}' 2>&1); then
+                infoln "Chaincode running on ${ORG_PEER_HOSTS[$i]}"
+                break
+            fi
+            local why; why=$(echo "${out}" | grep -oE 'No such image' | head -1)
+            [ -n "${why}" ] || why=$(echo "${out}" | grep -oE 'could not launch chaincode|error[^:]*' | head -1)
+            warnln "Chaincode did not start on ${ORG_PEER_HOSTS[$i]} (attempt ${attempt}): ${why}"
+            if [ "${attempt}" -eq 3 ]; then
+                errorln "Chaincode cannot run on ${ORG_PEER_HOSTS[$i]}. Peer log: docker logs ${ORG_PEER_HOSTS[$i]} 2>&1 | tail -50"
+                return 1
+            fi
+            infoln "Restarting ${ORG_PEER_HOSTS[$i]} so it rebuilds the chaincode image…"
+            runtimeRestartPeer "${ORG_PEER_HOSTS[$i]}" || true
+        done
+    done
 }
 
 verifyCommitted() {
@@ -271,7 +305,21 @@ networkStatus() {
 
 networkDown() {
     if [ ! -f config/network.derived.json ]; then
-        warnln "No derived config; nothing to tear down."
+        # Leftovers from older scripts (crypto folders but no derived config): remove the folders.
+        local old=()
+        local d; for d in organizations/peerOrganizations organizations/ordererOrganizations organizations/fabric-ca channel-artifacts; do
+            [ -e "$d" ] && old+=("$d")
+        done
+        if [ ${#old[@]} -eq 0 ]; then warnln "Nothing to tear down."; return 0; fi
+        warnln "No derived config, but files from an earlier deployment remain: ${old[*]}"
+        if [ -t 0 ] && [ "${1}" != "-y" ]; then
+            read -r -p "Delete them? [y/N] " a
+            [ "${a}" = "y" ] || [ "${a}" = "Y" ] || { infoln "Cancelled."; exit 0; }
+        fi
+        rm -rf "${old[@]}"
+        successln "Removed: ${old[*]}"
+        local vols; vols=$(docker volume ls -q 2>/dev/null | grep -E '(^|_)(peer0|orderer)\.' || true)
+        [ -n "${vols}" ] && warnln "Docker volumes from an earlier deployment may remain (remove with docker volume rm):"$'\n'"${vols}"
         return 0
     fi
     loadConfig

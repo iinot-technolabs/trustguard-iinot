@@ -47,7 +47,7 @@ export default function AdminView({ onNavigate }) {
     marginTop: 'auto', background: disabled ? '#CBD5E1' : color, color: '#FFFFFF', border: 'none',
     borderRadius: '8px', padding: '10px 0', fontWeight: 600, fontSize: '14px', cursor: disabled ? 'not-allowed' : 'pointer',
   })
-  const code = { background: '#F1F5F9', padding: '1px 5px', borderRadius: '4px', fontSize: '12px' }
+  const code = { background: '#E2E8F0', color: '#0F172A', padding: '1px 5px', borderRadius: '4px', fontSize: '12px' }
 
   return (
     <div style={{ padding: '40px 32px', maxWidth: '1120px', margin: '0 auto' }}>

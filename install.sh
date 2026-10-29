@@ -214,6 +214,19 @@ server {
 
     location / { try_files \$uri \$uri/ /index.html; }
 
+    # The page itself is always re-checked, so a browser never keeps an old dashboard after an
+    # update; the built assets have content hashes in their names and can be cached for long.
+    location = /index.html {
+        add_header Cache-Control "no-cache" always;
+        add_header X-Content-Type-Options nosniff;
+        add_header X-Frame-Options DENY;
+        add_header Referrer-Policy same-origin;
+    }
+    location /assets/ {
+        add_header Cache-Control "public, max-age=31536000, immutable";
+        add_header X-Content-Type-Options nosniff;
+    }
+
     location /api/ {
         proxy_pass         http://127.0.0.1:${BACKEND_PORT};
         proxy_http_version 1.1;
