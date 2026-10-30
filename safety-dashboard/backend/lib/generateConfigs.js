@@ -75,7 +75,9 @@ function caService(m, x, label) {
       - FABRIC_CA_SERVER_PORT=${x.caPort}
     ports:
       - ${publish(m, x.caPort)}
-    command: sh -c 'fabric-ca-server start -b admin:\${CA_ADMIN_PW_${envKey(x.caSlug)}:?run generateConfigs first}'
+    # First start: init with the bootstrap admin, then start without -b, because
+    # fabric-ca-server start prints its configuration (including -b) to the log (TG-024).
+    command: sh -c 'cd /etc/hyperledger/fabric-ca-server && if [ ! -f fabric-ca-server-config.yaml ]; then fabric-ca-server init -b "admin:\${CA_ADMIN_PW_${envKey(x.caSlug)}:?run generateConfigs first}" || exit 1; fi; chmod 600 fabric-ca-server-config.yaml; exec fabric-ca-server start'
     volumes:
       - ../organizations/fabric-ca/${x.caSlug}:/etc/hyperledger/fabric-ca-server
     restart: unless-stopped

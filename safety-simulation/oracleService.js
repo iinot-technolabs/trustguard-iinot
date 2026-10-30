@@ -171,7 +171,8 @@ function msToNextSlot() {
 }
 
 async function main() {
-  log(`Oracle starting: ${SITES.length} site(s), every ${INTERVAL_MIN} min, ${DRY_RUN ? 'DRY RUN' : `as ${IDENTITY}@${MSP_ID}`}`);
+  const who = DRY_RUN ? 'DRY RUN' : (id => `as ${id.name}@${id.mspId}`)(oracleIdentity());
+  log(`Oracle starting: ${SITES.length} site(s), every ${INTERVAL_MIN} min, ${who}`);
   const db = DRY_RUN ? null : openDb();
   await cycle(db);
   if (ONCE || DRY_RUN) { resetFabric(); return; }
