@@ -65,6 +65,7 @@ bash install.sh --enable-services
 ```
 cd /root/trustguard-iinot/safety-simulation && node simulateEvent.js     # end-to-end smoke test, every role
 cd /root/trustguard-iinot/iinot-network && ./scripts/network.sh status   # peers, channel, committed chaincode + policy
+bash /root/trustguard-iinot/iinot-network/scripts/acceptance-checks.sh       # policy refusal test, secrets scan, ports
 systemctl status trustguard-backend trustguard-gateway trustguard-oracle trustguard-escalation
 ```
 
@@ -77,6 +78,9 @@ systemctl status trustguard-backend trustguard-gateway trustguard-oracle trustgu
 | Delete the network | `cd iinot-network && ./scripts/network.sh down` (ledgers and crypto are deleted; asks first) |
 | Rotate CA and identity secrets | `down`, then delete `iinot-network/config/secrets/`, then deploy again |
 | Logs | `journalctl -fu trustguard-backend` (also `-gateway`, `-oracle`, `-escalation`) |
+| Back up | `bash iinot-network/scripts/backup.sh` → `backups/tg-backup-<channel>-<date>.tar.gz` (+ `.sha256`). Stops the network for about a minute; holds keys and secrets, so copy it off the server to encrypted storage |
+| Restore | `bash iinot-network/scripts/restore.sh <archive>` (same `TG_HOME`; on a new server install the package first). Then `network.sh status` and the smoke test |
+| Acceptance checks | `bash iinot-network/scripts/acceptance-checks.sh` — channel settings, endorsement-policy refusal test, secrets scan, listening ports |
 
 This package performs **fresh installs**. Chaincode upgrades and adding an organisation to a running channel are
 separate, rehearsed procedures, not part of the installer.
@@ -86,5 +90,5 @@ separate, rehearsed procedures, not part of the installer.
 - **SSH:** key-only login and fail2ban (`PasswordAuthentication no`, `PermitRootLogin prohibit-password`); make sure your key works first.
 - **HTTPS:** put a domain on the server and add a certificate (for example certbot for nginx), then open 443.
 - **MQTT:** if ChirpStack runs here, keep Mosquitto's 1883 on 127.0.0.1; anyone who can publish there can fake an SOS.
-- **Cloud VMs with Docker:** if networking stops after an unclean reboot, see change register TG-019 (networkd safety net).
+- **Cloud VMs with Docker:** `install.sh` removes systemd-networkd's restart limit and adds fallback DNS servers (TG-019). After any reboot, check `systemctl is-active systemd-networkd`.
 - **Weather data:** Open-Meteo's free API is for non-commercial use; a paid deployment needs a subscription or another source.

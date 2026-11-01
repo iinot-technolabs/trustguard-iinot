@@ -202,12 +202,16 @@ done
 section "7. nginx (port 80)"
 DIST="${TG_HOME}/safety-dashboard/frontend/dist"
 cat > /etc/nginx/sites-available/trustguard <<EOF
+# Access log without query strings: the Deploy log stream passes the login token as ?token= (DI-12).
+log_format tg_noquery '\$remote_addr - \$remote_user [\$time_local] "\$request_method \$uri \$server_protocol" '
+                      '\$status \$body_bytes_sent "\$http_referer" "\$http_user_agent"';
 server {
     listen 80 default_server;
     server_name _;
     root ${DIST};
     index index.html;
     client_max_body_size 2m;
+    access_log /var/log/nginx/access.log tg_noquery;
     add_header X-Content-Type-Options nosniff;
     add_header X-Frame-Options DENY;
     add_header Referrer-Policy same-origin;
@@ -244,6 +248,31 @@ rm -f /etc/nginx/sites-enabled/default
 p="${DIST}"; while [ "$p" != "/" ]; do chmod o+x "$p"; p="$(dirname "$p")"; done
 chmod -R o+rX "${DIST}"
 nginx -t -q && systemctl reload nginx && ok "dashboard on http://${SERVER_IP}/"
+
+# ── 7b. Host resilience and log size (TG-019, DI-05) ─────────────────────────
+section "7b. Host networking safety net and Docker log rotation"
+# Cloud VMs with Docker: at boot, interface hot-plug can restart systemd-networkd until systemd's
+# start limit stops it (no DNS, no DHCP renewal). Remove that limit, and give the resolver fallback
+# servers that are used only when the network supplied none.
+mkdir -p /etc/systemd/system/systemd-networkd.service.d /etc/systemd/resolved.conf.d
+printf '[Unit]\nStartLimitIntervalSec=0\n' > /etc/systemd/system/systemd-networkd.service.d/10-trustguard.conf
+[ -f /etc/systemd/resolved.conf.d/10-trustguard.conf ] || \
+  printf '[Resolve]\nFallbackDNS=8.8.8.8 1.1.1.1 9.9.9.9\n' > /etc/systemd/resolved.conf.d/10-trustguard.conf
+systemctl daemon-reload
+systemctl is-active --quiet systemd-resolved && systemctl restart systemd-resolved || true
+if systemctl is-enabled --quiet systemd-networkd 2>/dev/null && ! systemctl is-active --quiet systemd-networkd; then
+  systemctl reset-failed systemd-networkd || true
+  warn "systemd-networkd was not running (DHCP renewal stops without it). Start it with the provider console open:  systemctl start systemd-networkd"
+fi
+ok "networkd start limit removed; fallback DNS 8.8.8.8 1.1.1.1 9.9.9.9 (used only when the network gives none)"
+# Container logs: Fabric containers rotate via the generated compose file; chaincode containers use
+# Docker's default, set here (takes effect for containers created after Docker's next restart).
+if [ ! -f /etc/docker/daemon.json ]; then
+  printf '{\n  "log-driver": "json-file",\n  "log-opts": { "max-size": "10m", "max-file": "5" }\n}\n' > /etc/docker/daemon.json
+  ok "Docker default log rotation 10 MB x 5 (/etc/docker/daemon.json; applies after Docker restarts)"
+else
+  info "/etc/docker/daemon.json exists; not changed (add log-opts max-size/max-file there if missing)"
+fi
 
 # ── 8. Firewall (optional) ───────────────────────────────────────────────────
 if [ "${FIREWALL}" = 1 ]; then

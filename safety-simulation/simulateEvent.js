@@ -125,6 +125,8 @@ async function main() {
     await check('incidents for one device', async () =>
       `${JSON.parse(text(await ins.contract.evaluateTransaction('GetIncidentsByDevice', device, '', ''))).length} incident(s)`);
     await refused('insurer may not list all incidents', () => ins.contract.evaluateTransaction('GetAllIncidents'), /denied|not allowed|cannot|role/i);
+  } else if ((net.orgs || []).some(o => o.type === 'insurer')) {
+    console.log('Insurer: the insurer organisation has no identity with role claims-reviewer — insurer checks skipped (fix the role in the Network Designer)');
   } else console.log('Insurer: not part of this network — skipped');
 
   for (const c of [gw, sup, aud, ora, ins]) if (c) { c.gateway.close(); c.client.close(); }

@@ -109,3 +109,19 @@ test('generate writes all outputs; secrets 0600, kept across runs, not in other 
   assert.match(fs.readFileSync(path.join(root, 'configtx.yaml'), 'utf8'), /BatchTimeout: 500ms/);
   fs.rmSync(home, { recursive: true, force: true });
 });
+
+test('TG-025: a role in the wrong organisation type is refused', () => {
+  const c = load('iinot-demo.network-config.json');
+  c.organizations[2].roles = [{ name: 'claims1', attrs: 'role.supervisor:ecert' }];   // what T10 hit
+  assert.throws(() => buildModel(c), e => e instanceof ConfigError
+    && e.problems.some(p => /claims1" has role "supervisor", which belongs in an employer organisation, not an insurer/.test(p))
+    && e.problems.some(p => /no identity with role claims-reviewer/.test(p)));
+});
+
+test('TG-025: a disabled insurer is not checked; tg-mining still valid', () => {
+  const c = load('iinot-demo.network-config.json');
+  c.organizations[2].enabled = false;
+  c.organizations[2].roles = [];
+  assert.doesNotThrow(() => buildModel(c));
+  assert.doesNotThrow(() => buildModel(load('tg-mining.network-config.json')));
+});

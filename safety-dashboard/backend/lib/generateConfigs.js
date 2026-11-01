@@ -75,12 +75,18 @@ function caService(m, x, label) {
       - FABRIC_CA_SERVER_PORT=${x.caPort}
     ports:
       - ${publish(m, x.caPort)}
-    # First start: init with the bootstrap admin, then start without -b, because
-    # fabric-ca-server start prints its configuration (including -b) to the log (TG-024).
-    command: sh -c 'cd /etc/hyperledger/fabric-ca-server && if [ ! -f fabric-ca-server-config.yaml ]; then fabric-ca-server init -b "admin:\${CA_ADMIN_PW_${envKey(x.caSlug)}:?run generateConfigs first}" || exit 1; fi; chmod 600 fabric-ca-server-config.yaml; exec fabric-ca-server start'
+    # First start: init with the bootstrap admin, then start without -b. Both print their
+    # configuration; the Docker image's init includes the -b value, so its output is filtered
+    # before it reaches the container log (TG-024, TG-025).
+    command: sh -c 'cd /etc/hyperledger/fabric-ca-server && if [ ! -f fabric-ca-server-config.yaml ]; then fabric-ca-server init -b "admin:\${CA_ADMIN_PW_${envKey(x.caSlug)}:?run generateConfigs first}" > /tmp/ca-init.log 2>&1; rc=$$?; grep -v "boot:" /tmp/ca-init.log; rm -f /tmp/ca-init.log; [ "$$rc" -eq 0 ] || exit "$$rc"; fi; chmod 600 fabric-ca-server-config.yaml; exec fabric-ca-server start'
     volumes:
       - ../organizations/fabric-ca/${x.caSlug}:/etc/hyperledger/fabric-ca-server
     restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
     networks:
       - ${m.network.dockerNetwork}`;
 }
@@ -126,6 +132,11 @@ function generateDockerCompose(m) {
       - ${publish(m, o.port)}
       - ${publish(m, o.adminPort)}
     restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
     networks:
       - ${m.network.dockerNetwork}`;
 
@@ -165,6 +176,11 @@ function generateDockerCompose(m) {
       - ${publish(m, p.peerPort)}
       - ${publish(m, p.opsPort)}
     restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
     networks:
       - ${m.network.dockerNetwork}`).join('\n');
 

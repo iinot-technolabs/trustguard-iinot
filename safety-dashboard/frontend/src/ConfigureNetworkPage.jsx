@@ -23,6 +23,17 @@ const roleOf = attrs => {
   const m = String(attrs || '').match(/^role[.=]([a-z-]+)/) || String(attrs || '').match(/^([a-z-]+)$/);
   return m ? m[1] : '';
 };
+// The Rules Designer stores event types as objects ({ name, riskScore, … }); this page shows names.
+const eventTypeNames = list => {
+  const names = (Array.isArray(list) ? list : []).map(e => (typeof e === 'string' ? e : e?.name)).filter(Boolean);
+  return names.length ? [...new Set(names)] : ['SOS', 'ManDown', 'GasAlert', 'OverTemp', 'Geofence'];
+};
+// Which roles each organisation type may hold (the server enforces the same rule).
+const ROLES_FOR_TYPE = {
+  employer:  ['gateway', 'supervisor'],
+  regulator: ['auditor', 'oracle'],
+  insurer:   ['claims-reviewer'],
+};
 const legacyType = t => (t === 'industry' || t === 'custom' || !t) ? 'employer' : t;
 
 // Endorsement policy as the deploy builds it: every enabled org marked "endorses" must sign.
@@ -167,7 +178,7 @@ function denormalizeConfig(saved) {
     chaincode: {
       name:              (saved.chaincode || {}).name              || 'safetycc',
       version:           (saved.chaincode || {}).version           || '1.3',
-      eventTypes:        (saved.chaincode || {}).eventTypes        || ['SOS','ManDown','GasAlert','OverTemp','Geofence'],
+      eventTypes:        eventTypeNames((saved.chaincode || {}).eventTypes),
     },
     dashboard: {
       backendPort: (saved.dashboard || {}).backendPort || 3001,
@@ -438,7 +449,9 @@ function OrgCard({ org, index, total, onChange, onRemove, onMove }) {
                       onChange={e => updateRole(role.id, 'attrs', `role.${e.target.value}:ecert`)}
                     >
                       <option value="" disabled>choose a role…</option>
-                      {APP_ROLES.map(r => <option key={r.value} value={r.value}>{r.label}</option>)}
+                      {APP_ROLES.filter(r => (ROLES_FOR_TYPE[org.type] || []).includes(r.value) || r.value === roleOf(role.attrs))
+                                .map(r => <option key={r.value} value={r.value}
+                                                  disabled={!(ROLES_FOR_TYPE[org.type] || []).includes(r.value)}>{r.label}</option>)}
                     </select>
                     <button className="cn-role-remove" onClick={() => removeRole(role.id)}>×</button>
                   </div>
@@ -619,7 +632,7 @@ export default function ConfigureNetworkPage({ onBack, onConfigChange, initialCo
         path:              'safety-chaincode',
         lang:              'node',
         accessRules:       {},
-        eventTypes:        config.chaincode.eventTypes,
+        eventTypes:        eventTypeNames(config.chaincode.eventTypes),
       },
       dashboard: {
         backendPort: config.dashboard.backendPort,
@@ -638,6 +651,13 @@ export default function ConfigureNetworkPage({ onBack, onConfigChange, initialCo
       if (!org.mspId)       errors.push(`Org ${i + 1}: MSP ID required`);
       if (!org.displayName) errors.push(`Org ${i + 1}: Display name required`);
       org.roles.forEach(r => { if (!r.name || !roleOf(r.attrs)) errors.push(`Org ${i + 1}: every identity needs a name and a role`); });
+      org.roles.forEach(r => {
+        const role = roleOf(r.attrs);
+        if (role && !(ROLES_FOR_TYPE[org.type] || []).includes(role))
+          errors.push(`${org.displayName || `Org ${i + 1}`}: role "${role}" belongs to ${Object.keys(ROLES_FOR_TYPE).find(t => ROLES_FOR_TYPE[t].includes(role))} organisations, not ${org.type}`);
+      });
+      if (org.type === 'insurer' && org.enabled !== false && !org.roles.some(r => roleOf(r.attrs) === 'claims-reviewer'))
+        errors.push(`${org.displayName || `Org ${i + 1}`}: an insurer in the network needs a claims-reviewer identity`);
     });
     const active = config.organizations.filter(o => o.enabled !== false);
     if (!active.some(o => o.endorses)) errors.push('At least one organisation must endorse every write');
@@ -892,10 +912,10 @@ export default function ConfigureNetworkPage({ onBack, onConfigChange, initialCo
         <div className="cn-field" style={{ marginTop: '14px' }}>
           <label className="cn-label">
             Event Types
-            <span className="cn-hint">— press Enter to add; each becomes a Fabric event constant in safetyContract.js</span>
+            <span className="cn-hint">— press Enter to add; saved with the network config. The chaincode does not use this list yet (Rules Designer enforcement is planned)</span>
           </label>
           <TagInput
-            tags={config.chaincode.eventTypes}
+            tags={eventTypeNames(config.chaincode.eventTypes)}
             onChange={v => updateChaincode('eventTypes', v)}
             placeholder="Add event type e.g. SOS…"
           />

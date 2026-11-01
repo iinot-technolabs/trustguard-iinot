@@ -19,6 +19,9 @@ const path = require('path');
 
 const ORG_TYPES = ['employer', 'regulator', 'insurer'];
 const KNOWN_ROLES = ['gateway', 'supervisor', 'auditor', 'claims-reviewer', 'oracle'];
+// Which organisation type may hold each role. Each organisation's CA issues its own identities,
+// so a role in the wrong organisation would let that organisation act for another (TG-025).
+const ROLE_ORG_TYPE = { gateway: 'employer', supervisor: 'employer', auditor: 'regulator', oracle: 'regulator', 'claims-reviewer': 'insurer' };
 
 const RE = {
   domain:   /^(?=.{3,120}$)[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$/,
@@ -166,6 +169,14 @@ function buildModel(raw, opts = {}) {
       need(RE.role.test(u.role), `${where}: user "${u.name}" has role "${u.role}"; expected e.g. role.gateway:ecert`);
       if (RE.role.test(u.role) && !KNOWN_ROLES.includes(u.role)) warnings.push(`${where}: role "${u.role}" is not one the chaincode checks (${KNOWN_ROLES.join(', ')})`);
     });
+    if (enabled) {
+      org.users.forEach(u => {
+        const t = ROLE_ORG_TYPE[u.role];
+        const an = w => (/^[aeiou]/.test(w) ? `an ${w}` : `a ${w}`);
+        need(!t || t === type, `${where}: identity "${u.name}" has role "${u.role}", which belongs in ${an(t)} organisation, not ${an(type)}`);
+      });
+      if (type === 'insurer') need(org.users.some(u => u.role === 'claims-reviewer'), `${where}: the insurer is in the network but has no identity with role claims-reviewer`);
+    }
     if (enabled) orgs.push(org);
   });
 
@@ -237,4 +248,4 @@ function buildModel(raw, opts = {}) {
   };
 }
 
-module.exports = { buildModel, parseRole, ConfigError, KNOWN_ROLES, ORG_TYPES };
+module.exports = { buildModel, parseRole, ConfigError, KNOWN_ROLES, ORG_TYPES, ROLE_ORG_TYPE };

@@ -104,6 +104,8 @@ export default function DeployPage({ networkConfig, onBack }) {
 
     es.addEventListener('log', e => {
       const entry = JSON.parse(e.data);
+      if (!entry.ts) entry.ts = Date.now();          // server lines carry no time; stamp on arrival
+      if (!entry.stream) entry.stream = 'stdout';
       setLogs(l => [...l, entry]);
       const stepIdx = detectStep(entry.line);
       if (stepIdx >= 0) setCurrentStep(s => Math.max(s, stepIdx));

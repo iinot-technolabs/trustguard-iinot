@@ -4,6 +4,7 @@ import SiteConditions from './SiteConditions'
 import AssignmentsPanel from './AssignmentsPanel'
 import ComplianceCard from './ComplianceCard'
 import StatutoryPanel from './StatutoryPanel'
+import { trailLabel } from './trail'
 
 const API = '/api'
 
@@ -384,7 +385,7 @@ export default function SupervisorView({ session }) {
                     padding: '8px 10px', marginBottom: '6px', fontSize: '11px'
                   }}>
                     <div style={{ fontWeight: 600, color: '#028090', marginBottom: '2px' }}>
-                      {entry.value?.status || 'CREATED'}
+                      {trailLabel(history.entries, i)}
                     </div>
                     <div style={{ color: '#64748B', fontFamily: 'monospace' }}>
                       txId: {entry.txId?.slice(0, 16)}…

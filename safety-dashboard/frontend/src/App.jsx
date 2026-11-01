@@ -8,6 +8,7 @@ import ConfigureNetworkPage from './ConfigureNetworkPage'
 import RulesDesignerPage   from './RulesDesignerPage'
 import DeployPage from './DeployPage'
 import AdminView from './AdminView'
+import ErrorBoundary from './ErrorBoundary'
 import { getSession, clearSession } from './api'
 
 // Shared nav-tab style factory
@@ -170,6 +171,7 @@ export default function App() {
       </nav>
 
       {/* ── Page Views ── */}
+      <ErrorBoundary resetKey={view}>
 
       {view === 'configure' && isAdmin && (
         <ConfigureNetworkPage
@@ -210,6 +212,7 @@ export default function App() {
         <InsurerView session={session} />
       )}
 
+      </ErrorBoundary>
 
     </div>
   )

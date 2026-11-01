@@ -5,6 +5,7 @@ import { riskDrivers } from './SupervisorView'
 import ComplianceCard from './ComplianceCard'
 import Form18Modal, { StatusBadge } from './Form18'
 import { useNetworkInfo, orgLabel } from './networkInfo'
+import { trailLabel } from './trail'
 
 const API = '/api'
 
@@ -198,7 +199,7 @@ export default function AuditorView({ session }) {
                 paddingLeft: '12px', marginBottom: '14px'
               }}>
                 <div style={{ fontWeight: 700, color: '#028090', fontSize: '12px', marginBottom: '2px' }}>
-                  {entry.value?.status || 'CREATED'}
+                  {trailLabel(history.entries, i)}
                 </div>
                 <div style={{ fontSize: '10px', color: '#64748B', fontFamily: 'monospace', marginBottom: '2px' }}>
                   tx: {entry.txId?.slice(0, 20)}…
