@@ -15,6 +15,11 @@
 #   down        stop everything and delete this network's crypto material, ledgers and wallet entries
 #
 # Environment: TG_HOME (default: repo root), FABRIC_BIN (default: $TG_HOME/bin), NODE_BIN (default: node)
+#
+# The CA enrolment sequence and the NodeOU config.yaml layout follow the pattern of
+# hyperledger/fabric-samples test-network (organizations/fabric-ca/registerEnroll.sh, network.sh),
+# Apache License 2.0, https://github.com/hyperledger/fabric-samples. This file is a rewrite for
+# TrustGuard IIoT (config-driven names, ports and secrets); no fabric-samples file is copied verbatim.
 
 set -eo pipefail
 cd "$(dirname "$0")/.."                      # iinot-network/

@@ -111,8 +111,14 @@ function connect(id, deps, options = {}) {
   const { grpc, connect: gwConnect, signers } = deps;
   const w = walletStatus(id);
   if (!w.ok) throw new Error(w.problem);
-  const client = new grpc.Client(id.peerEndpoint, grpc.credentials.createSsl(fs.readFileSync(id.tlsCertPath)),
-                                 { 'grpc.ssl_target_name_override': id.peerHostOverride });
+  // gRPC limits: the default 4 MB receive limit made GetAllIncidents fail at about 11,000 incidents
+  // (load test, TG-027). 64 MB covers roughly 130,000; paged queries are the Phase 2 fix.
+  const maxBytes = Math.max(4, parseInt(process.env.TG_GRPC_MAX_MB || '64', 10)) * 1024 * 1024;
+  const client = new grpc.Client(id.peerEndpoint, grpc.credentials.createSsl(fs.readFileSync(id.tlsCertPath)), {
+    'grpc.ssl_target_name_override': id.peerHostOverride,
+    'grpc.max_receive_message_length': maxBytes,
+    'grpc.max_send_message_length': maxBytes,
+  });
   const gateway = gwConnect({
     client,
     identity: { mspId: id.mspId, credentials: fs.readFileSync(id.certPath) },

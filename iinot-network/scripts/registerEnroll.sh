@@ -9,6 +9,11 @@
 #
 # Every secret comes from secrets.json (random, generated once). None is echoed:
 # commands that carry a secret run without `set -x`.
+#
+# The CA enrolment sequence and the NodeOU config.yaml layout follow the pattern of
+# hyperledger/fabric-samples test-network (organizations/fabric-ca/registerEnroll.sh, network.sh),
+# Apache License 2.0, https://github.com/hyperledger/fabric-samples. This file is a rewrite for
+# TrustGuard IIoT (config-driven names, ports and secrets); no fabric-samples file is copied verbatim.
 
 _caClient() {
     # fabric-ca-client with FABRIC_CA_CLIENT_HOME already exported by the caller
