@@ -2,7 +2,7 @@
 /**
  * /api/deploy — run network.sh from the dashboard and stream its log (SSE).
  *
- *   POST   /api/deploy          { networkConfig?, mode? }  mode: all | channel | deploy | identities | status
+ *   POST   /api/deploy          { networkConfig?, mode? }  mode: all | channel | deploy | identities | status | rules
  *                                networkConfig (optional) is validated and saved first; "all" regenerates
  *                                compose, configtx, app.env and secrets from it.
  *   POST   /api/deploy/enroll   enrol the app users into the wallet (= mode "identities")
@@ -15,13 +15,13 @@
  */
 const express = require('express');
 const fs      = require('fs');
-const path    = require('path');
 const { spawn } = require('child_process');
 const { buildModel, ConfigError } = require('../lib/networkModel');
 const { TG_HOME, NETWORK_ROOT, FABRIC_BIN, CONFIG_FILE, NETWORK_SCRIPT } = require('../lib/paths');
+const { writeConfig } = require('../lib/configFile');
 
 const router = express.Router();
-const MODES = ['all', 'channel', 'deploy', 'identities', 'status'];
+const MODES = ['all', 'channel', 'deploy', 'identities', 'status', 'rules'];
 
 let state = { running: false, pid: null, mode: null, startedAt: null, exitCode: null, logLines: [] };
 let clients = [];
@@ -75,8 +75,7 @@ router.post('/', (req, res) => {
   if (networkConfig) {
     try {
       buildModel(networkConfig, { tgHome: TG_HOME });           // validate before touching anything
-      fs.mkdirSync(path.dirname(CONFIG_FILE), { recursive: true });
-      fs.writeFileSync(CONFIG_FILE, JSON.stringify(networkConfig, null, 2));
+      writeConfig(networkConfig);                               // keeps the saved Rules Designer rules
     } catch (err) {
       if (err instanceof ConfigError) return res.status(400).json({ ok: false, problems: err.problems });
       return res.status(500).json({ ok: false, error: `Failed to save config: ${err.message}` });

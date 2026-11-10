@@ -101,7 +101,7 @@ const DEFAULT_CONFIG = {
   ],
   chaincode: {
     name:              'safetycc',
-    version:           '1.3',
+    version:           '1.4',
     eventTypes:        ['SOS', 'ManDown', 'GasAlert', 'OverTemp', 'Geofence'],
   },
   dashboard: {
@@ -177,7 +177,7 @@ function denormalizeConfig(saved) {
     })),
     chaincode: {
       name:              (saved.chaincode || {}).name              || 'safetycc',
-      version:           (saved.chaincode || {}).version           || '1.3',
+      version:           (saved.chaincode || {}).version           || '1.4',
       eventTypes:        eventTypeNames((saved.chaincode || {}).eventTypes),
     },
     dashboard: {
@@ -218,45 +218,6 @@ function Input({ value, onChange, placeholder, type = 'text', min, max }) {
         onChange(v);
       }}
     />
-  );
-}
-
-// ─── Tag Input (event types) ────────────────────────────────────────────────
-
-function TagInput({ tags, onChange, placeholder }) {
-  const [draft, setDraft] = useState('');
-
-  const commit = () => {
-    const val = draft.trim();
-    if (val && !tags.includes(val)) onChange([...tags, val]);
-    setDraft('');
-  };
-
-  const onKeyDown = (e) => {
-    if (e.key === 'Enter' || e.key === ',') { e.preventDefault(); commit(); }
-    if (e.key === 'Backspace' && !draft && tags.length) {
-      onChange(tags.slice(0, -1));
-    }
-  };
-
-  return (
-    <div className="cn-tag-input-wrapper" onClick={() => document.getElementById('cn-tag-inner')?.focus()}>
-      {tags.map(t => (
-        <span key={t} className="cn-tag">
-          {t}
-          <button className="cn-tag-remove" onClick={() => onChange(tags.filter(x => x !== t))}>×</button>
-        </span>
-      ))}
-      <input
-        id="cn-tag-inner"
-        className="cn-tag-inner-input"
-        value={draft}
-        placeholder={tags.length === 0 ? placeholder : ''}
-        onChange={e => setDraft(e.target.value)}
-        onKeyDown={onKeyDown}
-        onBlur={commit}
-      />
-    </div>
   );
 }
 
@@ -736,7 +697,7 @@ export default function ConfigureNetworkPage({ onBack, onConfigChange, initialCo
   const orgSummary  = config.organizations.map(o => `${o.displayName || o.mspId || '—'}${o.enabled === false ? ' (off)' : ''}`).join(', ');
   const policy      = derivedPolicy(config.organizations);
   const insurer     = config.organizations.find(o => o.type === 'insurer');
-  const ccSummary   = `${config.chaincode.name} v${config.chaincode.version} · ${config.chaincode.eventTypes.length} event types`;
+  const ccSummary   = `${config.chaincode.name} v${config.chaincode.version} · rules from the Rules Designer`;
   const dashSummary = `Backend :${config.dashboard.backendPort}`;
 
   return (
@@ -910,15 +871,11 @@ export default function ConfigureNetworkPage({ onBack, onConfigChange, initialCo
           </Field>
         </div>
         <div className="cn-field" style={{ marginTop: '14px' }}>
-          <label className="cn-label">
-            Event Types
-            <span className="cn-hint">— press Enter to add; saved with the network config. The chaincode does not use this list yet (Rules Designer enforcement is planned)</span>
-          </label>
-          <TagInput
-            tags={eventTypeNames(config.chaincode.eventTypes)}
-            onChange={v => updateChaincode('eventTypes', v)}
-            placeholder="Add event type e.g. SOS…"
-          />
+          <label className="cn-label">Event types and access rules</label>
+          <p className="cn-hint" style={{ margin: 0 }}>
+            Set in the Rules Designer (Admin page). After deploy they are stored on the channel and enforced by the
+            chaincode (safetycc 1.4 or later): event types classify incidents, access rules narrow who may call each function.
+          </p>
         </div>
       </Section>
 

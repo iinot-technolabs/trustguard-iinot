@@ -1,6 +1,6 @@
 'use strict';
 // ─────────────────────────────────────────────────────────────────────────────
-// safetycc 1.3 — TrustGuard IIoT safety contract (TG-013 1.1, TG-017 1.2, TG-021 1.3)
+// safetycc 1.4 — TrustGuard IIoT safety contract (TG-013 1.1, TG-017 1.2, TG-021 1.3, TG-028 1.4)
 //
 // Compatibility: every 1.0 function keeps its exact signature (Fabric rejects
 // calls with a different argument count), so the gateway, dashboard and
@@ -21,6 +21,17 @@
 //   RecordStatutoryReport  supervisor: SHA-256 + time of the filed Form 18 (personal data off-chain)
 //   GetComplianceScore     supervisor/auditor: 0-100 per site from response, escalation,
 //                          resolution and Form 18 timeliness — computed on any member's peer
+// 1.4 (Rules Designer enforcement, TG-028):
+//   SetRules               org admin of an endorsing org: stores the network's rules on the ledger
+//                          (versioned; every change needs the same endorsement as any write)
+//   GetRules / GetRulesHistory   current rules and every earlier version (audit trail of rule changes)
+//   Access rules narrow the built-in role checks per function group (never widen them).
+//   Event types classify incidents at LogIncident: severity, statutory reference and a risk floor
+//   (rule score × 10). An unknown type is still recorded, marked UNCLASSIFIED: a rule never drops
+//   a safety alarm. Escalation levels: automatic escalation (gateway identity) is refused before a
+//   level's time or past the last level; a supervisor can still escalate by hand. Response targets
+//   and report types (code, name, filing deadline) drive RecordStatutoryReport and the compliance
+//   score. No rules on the ledger (or a part left out) = 1.3 behaviour.
 //
 // Rules added in 1.1:
 //   • riskScore must be a number 0–100; eventHash must be 64-char hex SHA-256
@@ -32,10 +43,11 @@ const crypto = require('crypto');
 
 const OUTCOMES = ['GENUINE', 'FALSE_ALARM', 'NEAR_MISS'];
 const WORKER_REF = /^[A-Za-z0-9._-]{3,32}$/;     // pseudonymous code, never a name
-const READ_ROLES = ['supervisor', 'auditor', 'claims-reviewer'];
-const REPORT_TYPES = ['FORM18'];
 const REPORT_DECISIONS = ['REPORTABLE', 'NOT_REPORTABLE'];
-const REPORT_DEADLINE_MS = { FORM18: 12 * 3600 * 1000 };   // Rule 96: written notice within 12 h
+
+// 1.4: function groups the Rules Designer can restrict (shared with the dashboard).
+const { RULE_GROUPS, EVENT_NAME, severityOf, checkPolicyParts, policyOf } = require('./ruleGroups');
+const RULES_KEY = ['rulesConfig', ['current']];   // createCompositeKey(type, attributes)
 
 // from-status → allowed next statuses
 const TRANSITIONS = {
@@ -91,7 +103,7 @@ class SafetyContract extends Contract {
     // 1.0 signature, unchanged. Supervisor moves an incident to ACKNOWLEDGED or RESOLVED.
     // updatedAt is passed in so all endorsing peers compute the same record.
     async UpdateIncidentStatus(ctx, incidentId, newStatus, updatedAt) {
-        this._requireRole(ctx, ['supervisor'], 'update incident status');
+        await this._requireRole(ctx, 'acknowledge', 'update incident status');
         const validStatuses = ['ACKNOWLEDGED', 'RESOLVED'];
         if (!validStatuses.includes(newStatus)) {
             throw new Error(`Invalid status '${newStatus}'. Must be ACKNOWLEDGED or RESOLVED`);
@@ -113,7 +125,7 @@ class SafetyContract extends Contract {
     // 1.1: supervisor resolves with an outcome tag — the label for the AI risk model.
     //   outcome: GENUINE | FALSE_ALARM | NEAR_MISS     notes: free text ≤ 500 chars (may be empty)
     async ResolveIncident(ctx, incidentId, outcome, notes, resolvedAt) {
-        this._requireRole(ctx, ['supervisor'], 'resolve incidents');
+        await this._requireRole(ctx, 'resolve', 'resolve incidents');
         if (!OUTCOMES.includes(outcome)) {
             throw new Error(`Invalid outcome '${outcome}'. Must be one of ${OUTCOMES.join(', ')}`);
         }
@@ -136,10 +148,24 @@ class SafetyContract extends Contract {
     // 1.1: escalate an incident nobody has acknowledged. Called by the escalation
     // service (gateway identity) or a supervisor. Repeat calls raise the level.
     async EscalateIncident(ctx, incidentId, reason, escalatedAt) {
-        this._requireRole(ctx, ['gateway', 'supervisor'], 'escalate incidents');
+        const role = await this._requireRole(ctx, 'escalate', 'escalate incidents');
         const incident = await this._getIncident(ctx, incidentId);
         this._checkTransition(incident, 'ESCALATED');
         this._isoTime(escalatedAt, 'escalatedAt');
+        // 1.4: automatic escalation follows the network's escalation levels (a supervisor may escalate by hand)
+        const rules = await this._rules(ctx);
+        if (role === 'gateway' && rules && rules.escalation) {
+            const next = (incident.escalationLevel || 0) + 1;
+            const step = rules.escalation.levels.find(l => l.level === next);
+            if (!step) throw new Error(`Network rules v${rules.version} have no escalation level ${next}`);
+            const ageMin = (Date.parse(escalatedAt) - Date.parse(incident.timestamp)) / 60000;
+            if (ageMin < step.afterMinutes) {
+                throw new Error(`Too early: level ${next} is due ${step.afterMinutes} min after the incident (network rules v${rules.version}), it is ${Math.floor(ageMin)} min old`);
+            }
+            if (step.minRisk !== undefined && !(Number(incident.riskScore) >= step.minRisk)) {
+                throw new Error(`Level ${next} needs risk ≥ ${step.minRisk} (network rules v${rules.version}); this incident is ${incident.riskScore}`);
+            }
+        }
 
         incident.status           = 'ESCALATED';
         incident.escalationLevel  = (incident.escalationLevel || 0) + 1;
@@ -161,7 +187,7 @@ class SafetyContract extends Contract {
     // for a site. The chaincode recomputes SHA-256 of dataJson and rejects it if it
     // does not match dataHash, so the stored reading is exactly what was fetched.
     async SubmitOracleData(ctx, siteId, readingId, source, observedAt, dataHash, dataJson) {
-        this._requireRole(ctx, ['oracle'], 'submit oracle data');
+        await this._requireRole(ctx, 'oracleData', 'submit oracle data');
         this._str(siteId, 'siteId', 64);
         this._str(readingId, 'readingId', 64);
         this._isoTime(observedAt, 'observedAt');
@@ -205,14 +231,14 @@ class SafetyContract extends Contract {
     // Supervisor and auditor see everything; the insurer (claims-reviewer) uses the
     // worker/device queries below so it only sees what a claim needs (1.2).
     async GetAllIncidents(ctx) {
-        this._requireRole(ctx, ['supervisor', 'auditor'], 'list all incidents');
+        await this._requireRole(ctx, 'listAllIncidents', 'list all incidents');
         return JSON.stringify(await this._allIncidents(ctx));
     }
 
     // ── Worker assignments + insurer queries (1.2) ───────────────────────────
 
     async RegisterWorkerAssignment(ctx, workerRef, deviceId, fromTs, toTs) {
-        this._requireRole(ctx, ['supervisor'], 'register worker assignments');
+        await this._requireRole(ctx, 'workerAssignments', 'register worker assignments');
         if (!WORKER_REF.test(workerRef || '')) throw new Error('workerRef must be a 3-32 character code (letters, digits, . _ -), not a name');
         this._str(deviceId, 'deviceId', 64);
         this._isoTime(fromTs, 'fromTs');
@@ -231,7 +257,7 @@ class SafetyContract extends Contract {
     }
 
     async CloseWorkerAssignment(ctx, workerRef, deviceId, fromTs, toTs) {
-        this._requireRole(ctx, ['supervisor'], 'close worker assignments');
+        await this._requireRole(ctx, 'workerAssignments', 'close worker assignments');
         this._isoTime(toTs, 'toTs');
         const key = ctx.stub.createCompositeKey('workerAssignment', [workerRef, deviceId, fromTs]);
         const data = await ctx.stub.getState(key);
@@ -246,7 +272,7 @@ class SafetyContract extends Contract {
 
     // Incidents raised by the beacons a worker wore, only inside the wearing periods.
     async GetIncidentsByWorker(ctx, workerRef, fromTs, toTs) {
-        this._requireRole(ctx, READ_ROLES, 'query incidents by worker');
+        await this._requireRole(ctx, 'claimsQueries', 'query incidents by worker');
         if (!WORKER_REF.test(workerRef || '')) throw new Error('invalid workerRef');
         if (fromTs) this._isoTime(fromTs, 'fromTs');
         if (toTs) this._isoTime(toTs, 'toTs');
@@ -258,7 +284,7 @@ class SafetyContract extends Contract {
     }
 
     async GetIncidentsByDevice(ctx, deviceId, fromTs, toTs) {
-        this._requireRole(ctx, READ_ROLES, 'query incidents by device');
+        await this._requireRole(ctx, 'claimsQueries', 'query incidents by device');
         if (fromTs) this._isoTime(fromTs, 'fromTs');
         if (toTs) this._isoTime(toTs, 'toTs');
         const all = await this._allIncidents(ctx);
@@ -273,7 +299,7 @@ class SafetyContract extends Contract {
 
     // decision: REPORTABLE | NOT_REPORTABLE (reason required — visible to the regulator)
     async SetReportability(ctx, incidentId, decision, reason, decidedAt) {
-        this._requireRole(ctx, ['supervisor'], 'decide reportability');
+        await this._requireRole(ctx, 'statutoryReporting', 'decide reportability');
         if (!REPORT_DECISIONS.includes(decision)) throw new Error(`decision must be one of ${REPORT_DECISIONS.join(', ')}`);
         const why = this._str(reason || '', 'reason', 300, decision === 'REPORTABLE');
         this._isoTime(decidedAt, 'decidedAt');
@@ -291,16 +317,20 @@ class SafetyContract extends Contract {
 
     // reportType: FORM18 (Annexure-I later). Re-filing (correction) appends a new version.
     async RecordStatutoryReport(ctx, incidentId, reportType, reportHash, reportedAt) {
-        this._requireRole(ctx, ['supervisor'], 'record statutory reports');
-        if (!REPORT_TYPES.includes(reportType)) throw new Error(`reportType must be one of ${REPORT_TYPES.join(', ')}`);
+        await this._requireRole(ctx, 'statutoryReporting', 'record statutory reports');
+        const rules = await this._rules(ctx);
+        const type = policyOf(rules).reportTypes.find(r => r.code === reportType);
+        if (!type) throw new Error(`reportType must be one of ${policyOf(rules).reportTypes.map(r => r.code).join(', ')}`);
         this._sha256Hex(reportHash, 'reportHash');
         this._isoTime(reportedAt, 'reportedAt');
         const incident = await this._getIncident(ctx, incidentId);
         if (Date.parse(reportedAt) < Date.parse(incident.timestamp)) throw new Error('reportedAt is before the incident');
         const reports = incident.statutoryReports || [];
         const version = reports.filter(r => r.reportType === reportType).length + 1;
-        reports.push({ reportType, version, reportHash, reportedAt, reportedBy: ctx.clientIdentity.getID(),
-                       withinDeadline: Date.parse(reportedAt) - Date.parse(incident.timestamp) <= REPORT_DEADLINE_MS[reportType] });
+        const entry = { reportType, version, reportHash, reportedAt, reportedBy: ctx.clientIdentity.getID(),
+                        withinDeadline: Date.parse(reportedAt) - Date.parse(incident.timestamp) <= type.deadlineHours * 3600000 };
+        if (rules) { entry.deadlineHours = type.deadlineHours; entry.rulesVersion = rules.version; }
+        reports.push(entry);
         incident.statutoryReports = reports;
         if (!incident.reportability || incident.reportability.decision !== 'REPORTABLE') {
             const entry = { decision: 'REPORTABLE', reason: `${reportType} filed`, decidedAt: reportedAt, decidedBy: ctx.clientIdentity.getID() };
@@ -321,7 +351,7 @@ class SafetyContract extends Contract {
     //   GENUINE not marked NOT_REPORTABLE. Metrics with no eligible incidents are skipped and the
     //   remaining weights rescaled. Site = the oracle site the gateway attached ('unassigned' if none).
     async GetComplianceScore(ctx, fromTs, toTs, asOfTs) {
-        this._requireRole(ctx, ['supervisor', 'auditor'], 'view the compliance score');
+        await this._requireRole(ctx, 'complianceScore', 'view the compliance score');
         if (fromTs) this._isoTime(fromTs, 'fromTs');
         if (toTs) this._isoTime(toTs, 'toTs');
         this._isoTime(asOfTs, 'asOfTs');
@@ -333,14 +363,18 @@ class SafetyContract extends Contract {
             const site = (i.risk && i.risk.oracleRef && String(i.risk.oracleRef).split('|')[0]) || 'unassigned';
             (bySite[site] = bySite[site] || []).push(i);
         }
-        const sites = Object.keys(bySite).sort().map(site => ({ site, ...this._score(bySite[site], asOf) }));
+        const rules = await this._rules(ctx);
+        const pol = policyOf(rules);
+        const sites = Object.keys(bySite).sort().map(site => ({ site, ...this._score(bySite[site], asOf, pol) }));
         return JSON.stringify({ fromTs: fromTs || null, toTs: toTs || null, asOfTs, model: 'compliance-v1',
-                                overall: this._score(all, asOf), sites });
+                                rulesVersion: rules ? rules.version : null,
+                                targets: { ...pol.targets, escalateToLevel2AfterMinutes: this._l2(pol), reportTypes: pol.reportTypes },
+                                overall: this._score(all, asOf, pol), sites });
     }
 
     // Full audit history for a single incident (immutable ledger trail)
     async GetIncidentHistory(ctx, incidentId) {
-        this._requireRole(ctx, ['auditor', 'supervisor', 'claims-reviewer'], 'view incident history');
+        await this._requireRole(ctx, 'incidentHistory', 'view incident history');
         const iterator = await ctx.stub.getHistoryForKey(incidentId);
         const history  = [];
         let result     = await iterator.next();
@@ -355,6 +389,86 @@ class SafetyContract extends Contract {
         }
         await iterator.close();
         return JSON.stringify(history);
+    }
+
+    // ── Network rules (1.4, Rules Designer) ──────────────────────────────────
+    // rulesJson: { "eventTypes": [{ "name": "SOS", "riskScore": 10, "statutory": "Factories Act s.88" }],
+    //              "access": { "<group>": ["supervisor", ...] | ["any"] },
+    //              "escalation": { "levels": [{ "afterMinutes": 5 }, { "afterMinutes": 15 }, { "afterMinutes": 240, "minRisk": 90 }] },
+    //              "targets": { "ackMinutes": 5, "resolveHours": 24 },
+    //              "reportTypes": [{ "code": "FORM18", "name": "Form 18 ...", "deadlineHours": 12 }],
+    //              "adminMsps": ["EmployerMSP", "RegulatorMSP"] }      (escalation/targets/reportTypes optional)
+    // Only an org admin (certificate OU=admin) may call it; once rules exist, only admins of the
+    // MSPs in the current adminMsps. Groups left out keep their built-in roles.
+    async SetRules(ctx, rulesJson, setAt) {
+        const id = ctx.clientIdentity.getID();
+        const subject = id.split('::')[1] || '';
+        if (!/(^|\/)OU=admin(\/|$)/.test(subject)) throw new Error('Access denied: only an organisation admin can set the network rules');
+        this._isoTime(setAt, 'setAt');
+        if (!rulesJson || rulesJson.length > 16384) throw new Error('rulesJson must be 1–16384 characters');
+        let input;
+        try { input = JSON.parse(rulesJson); } catch { throw new Error('rulesJson is not valid JSON'); }
+        if (!input || typeof input !== 'object' || Array.isArray(input)) throw new Error('rulesJson must be a JSON object');
+        const msp = ctx.clientIdentity.getMSPID();
+        const current = await this._rules(ctx);
+        const adminMsps = Array.isArray(input.adminMsps) ? [...new Set(input.adminMsps.map(String))] : (current ? current.adminMsps : []);
+        if (!adminMsps.length || adminMsps.some(m => !/^[A-Za-z0-9.-]{1,64}$/.test(m))) throw new Error('adminMsps must list 1 or more MSP IDs');
+        if (current && !current.adminMsps.includes(msp)) throw new Error(`Access denied: ${msp} is not allowed to change the network rules`);
+        if (!adminMsps.includes(msp)) throw new Error(`adminMsps must include the caller's MSP (${msp})`);
+
+        const eventTypes = [];
+        for (const e of Array.isArray(input.eventTypes) ? input.eventTypes : []) {
+            if (!e || !EVENT_NAME.test(e.name || '')) throw new Error(`event type name '${e && e.name}' must be 1-32 letters, digits, _ or -, starting with a letter`);
+            const n = Number(e.riskScore);
+            if (!Number.isInteger(n) || n < 1 || n > 10) throw new Error(`riskScore of ${e.name} must be a whole number 1–10`);
+            if (eventTypes.some(x => x.name.toUpperCase() === e.name.toUpperCase())) throw new Error(`event type ${e.name} is listed twice`);
+            eventTypes.push({ name: e.name, riskScore: n, statutory: this._str(e.statutory || '', 'statutory', 120, true) });
+        }
+        if (eventTypes.length > 50) throw new Error('at most 50 event types');
+        const access = {};
+        for (const [group, roles] of Object.entries(input.access || {})) {
+            if (!RULE_GROUPS[group]) throw new Error(`unknown access group '${group}' (known: ${Object.keys(RULE_GROUPS).join(', ')})`);
+            if (!Array.isArray(roles) || !roles.length) throw new Error(`access.${group} must list at least one role, or "any"`);
+            const list = [...new Set(roles.map(String))];
+            if (list.includes('any') && list.length > 1) throw new Error(`access.${group}: "any" cannot be combined with roles`);
+            const beyond = list.filter(r => r !== 'any' && !RULE_GROUPS[group].builtin.includes(r));
+            if (beyond.length) throw new Error(`access.${group}: ${beyond.join(', ')} cannot be allowed (most allowed: ${RULE_GROUPS[group].builtin.join(', ')})`);
+            access[group] = list;
+        }
+        const parts = checkPolicyParts(input);
+        if (parts.problems.length) throw new Error(parts.problems.join('; '));
+        const rules = { docType: 'rules', model: 'rules-v1', version: current ? current.version + 1 : 1,
+                        eventTypes, access, escalation: parts.value.escalation || null, targets: parts.value.targets || null,
+                        reportTypes: parts.value.reportTypes || null, adminMsps, setAt, setBy: id, setByMsp: msp };
+        await ctx.stub.putState(ctx.stub.createCompositeKey(...RULES_KEY), Buffer.from(JSON.stringify(rules)));
+        ctx.stub.setEvent('RulesSet', Buffer.from(JSON.stringify({ version: rules.version, setByMsp: msp })));
+        return JSON.stringify(rules);
+    }
+
+    // Any member: the rules now in force (or a 1.3-defaults marker), with the effective roles per group
+    async GetRules(ctx) {
+        const rules = await this._rules(ctx);
+        const effective = {};
+        for (const [g, def] of Object.entries(RULE_GROUPS)) {
+            const r = rules && rules.access[g];
+            effective[g] = { label: def.label, builtin: def.builtin,
+                             allowed: !r || r.includes('any') ? def.builtin : def.builtin.filter(x => r.includes(x)) };
+        }
+        const pol = policyOf(rules);
+        return JSON.stringify({ rules: rules || null, effective, policy: { escalation: pol.escalation, targets: pol.targets,
+                                reportTypes: pol.reportTypes, escalationEnforced: pol.escalationFromRules } });
+    }
+
+    async GetRulesHistory(ctx) {
+        const it = await ctx.stub.getHistoryForKey(ctx.stub.createCompositeKey(...RULES_KEY));
+        const out = [];
+        let r = await it.next();
+        while (!r.done) {
+            out.push({ txId: r.value.txId, timestamp: r.value.timestamp, value: JSON.parse(r.value.value.toString('utf8')) });
+            r = await it.next();
+        }
+        await it.close();
+        return JSON.stringify(out);
     }
 
     // ── Private helpers ──────────────────────────────────────────────────────
@@ -400,7 +514,7 @@ class SafetyContract extends Contract {
     }
 
     async _logIncident(ctx, f) {
-        this._requireRole(ctx, ['gateway'], 'log incidents');
+        await this._requireRole(ctx, 'logIncident', 'log incidents');
         this._str(f.incidentId, 'incidentId', 64);
         this._str(f.deviceId, 'deviceId', 64);
         this._str(f.eventType, 'eventType', 32);
@@ -429,6 +543,21 @@ class SafetyContract extends Contract {
         };
         if (f.risk && Object.keys(f.risk).length) incident.risk = f.risk;
 
+        // 1.4: classify with the event types in the network's rules (if any are set)
+        const rules = await this._rules(ctx);
+        if (rules && rules.eventTypes.length) {
+            const rule = rules.eventTypes.find(e => e.name.toUpperCase() === String(f.eventType).toUpperCase());
+            if (rule) {
+                const floor = rule.riskScore * 10;
+                incident.classification = { rulesVersion: rules.version, eventType: rule.name,
+                    severity: severityOf(rule.riskScore), statutory: rule.statutory || null, riskFloor: floor };
+                if (score < floor) { incident.classification.reportedRiskScore = String(f.riskScore); incident.riskScore = String(floor); }
+            } else {
+                incident.classification = { rulesVersion: rules.version, eventType: null, severity: 'UNCLASSIFIED',
+                    statutory: null, riskFloor: null };
+            }
+        }
+
         await this._put(ctx, incident);
         ctx.stub.setEvent('IncidentLogged', Buffer.from(JSON.stringify({
             incidentId: f.incidentId, eventType: f.eventType, riskScore: incident.riskScore,
@@ -436,8 +565,17 @@ class SafetyContract extends Contract {
         return JSON.stringify(incident);
     }
 
-    _score(incidents, asOf) {
+    _l2(pol) { const l2 = pol.escalation.find(l => l.level === 2); return l2 ? l2.afterMinutes : 15; }
+
+    _score(incidents, asOf, pol) {
         const MIN = 60000, ts = i => Date.parse(i.timestamp);
+        const ACK = pol.targets.ackMinutes * MIN, RES = pol.targets.resolveHours * 60 * MIN, L2 = this._l2(pol) * MIN;
+        const deadline = code => { const r = pol.reportTypes.find(x => x.code === code); return r ? r.deadlineHours * 3600000 : null; };
+        const first = pol.reportTypes[0], DUE = first.deadlineHours * 3600000;
+        const filedInTime = i => (i.statutoryReports || []).some(r => deadline(r.reportType) !== null && t(r.reportedAt) - ts(i) <= deadline(r.reportType));
+        const filedAny = i => (i.statutoryReports || []).some(r => deadline(r.reportType) !== null);
+        const reportLabel = pol.reportTypes.length === 1 ? `${first.code === 'FORM18' ? 'Form 18' : first.name} filed within ${first.deadlineHours} h`
+                                                         : 'Statutory report filed within its deadline';
         const t = v => (v ? Date.parse(v) : null);
         const responded = i => {
             const c = [t(i.acknowledgedAt), t(i.resolvedAt), i.status === 'RESOLVED' ? t(i.updatedAt) : null].filter(x => x !== null);
@@ -452,27 +590,39 @@ class SafetyContract extends Contract {
                      failedIds: failed.slice(0, 50).map(i => i.incidentId) };
         };
         const metrics = [
-            metric('ack5', 'Acknowledged within 5 min', 40, 5 * MIN, () => true,
-                   i => { const r = responded(i); return r !== null && r - ts(i) <= 5 * MIN; }),
-            metric('noEscalation', 'Never escalated past L1', 20, 15 * MIN, () => true,
+            metric('ack5', `Acknowledged within ${pol.targets.ackMinutes} min`, 40, ACK, () => true,
+                   i => { const r = responded(i); return r !== null && r - ts(i) <= ACK; }),
+            metric('noEscalation', 'Never escalated past L1', 20, L2, () => true,
                    i => (i.escalationLevel || 0) < 2),
-            metric('resolved24', 'Resolved with outcome within 24 h', 20, 24 * 60 * MIN, () => true,
-                   i => !!i.outcome && t(i.resolvedAt) !== null && t(i.resolvedAt) - ts(i) <= 24 * 60 * MIN),
-            metric('form18', 'Form 18 filed within 12 h', 20, REPORT_DEADLINE_MS.FORM18, reportable,
-                   i => (i.statutoryReports || []).some(r => r.reportType === 'FORM18' && t(r.reportedAt) - ts(i) <= REPORT_DEADLINE_MS.FORM18)),
+            metric('resolved24', `Resolved with outcome within ${pol.targets.resolveHours} h`, 20, RES, () => true,
+                   i => !!i.outcome && t(i.resolvedAt) !== null && t(i.resolvedAt) - ts(i) <= RES),
+            metric('form18', reportLabel, 20, DUE, reportable, filedInTime),
         ];
         const used = metrics.filter(m => m.rate !== null);
         const w = used.reduce((a, m) => a + m.weight, 0);
         const score = w ? Math.round(used.reduce((a, m) => a + m.weight * m.rate, 0) / w) : null;
-        const pending = incidents.filter(i => reportable(i) && !(i.statutoryReports || []).some(r => r.reportType === 'FORM18')
-                                              && ts(i) + REPORT_DEADLINE_MS.FORM18 > asOf).map(i => i.incidentId);
+        const pending = incidents.filter(i => reportable(i) && !filedAny(i) && ts(i) + DUE > asOf).map(i => i.incidentId);
         return { score, grade: score === null ? 'N/A' : score >= 90 ? 'A' : score >= 75 ? 'B' : score >= 60 ? 'C' : 'D',
                  incidents: incidents.length, metrics, form18DueSoon: pending.slice(0, 50) };
     }
 
-    _requireRole(ctx, roles, action) {
+    async _rules(ctx) {   // cached for the transaction
+        if (ctx.__tgRules === undefined) {
+            const data = await ctx.stub.getState(ctx.stub.createCompositeKey(...RULES_KEY));
+            ctx.__tgRules = data && data.length ? JSON.parse(data.toString()) : null;
+        }
+        return ctx.__tgRules;
+    }
+
+    async _requireRole(ctx, group, action) {
         const role = ctx.clientIdentity.getAttributeValue('role');
-        if (!roles.includes(role)) throw new Error(`Access denied: role '${role}' cannot ${action}`);
+        const def = RULE_GROUPS[group];
+        if (!def.builtin.includes(role)) throw new Error(`Access denied: role '${role}' cannot ${action}`);
+        const rules = await this._rules(ctx);
+        const r = rules && rules.access[group];
+        if (r && !r.includes('any') && !r.includes(role)) {
+            throw new Error(`Access denied by network rules v${rules.version}: role '${role}' cannot ${action}`);
+        }
         return role;
     }
 
@@ -524,3 +674,4 @@ class SafetyContract extends Contract {
 }
 
 module.exports = SafetyContract;
+module.exports.RULE_GROUPS = RULE_GROUPS;

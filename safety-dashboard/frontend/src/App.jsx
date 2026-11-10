@@ -92,21 +92,6 @@ export default function App() {
     setNetworkConfig(cfg)
   }
 
-  // Called by RulesDesignerPage when user saves rules
-  const handleRulesSave = (rules) => {
-    setNetworkConfig(prev => prev
-      ? {
-          ...prev,
-          chaincode: {
-            ...(prev.chaincode || {}),
-            eventTypes:  rules.eventTypes,
-            accessRules: rules.accessRules,
-          }
-        }
-      : null
-    )
-  }
-
   return (
     <div style={{ minHeight: '100vh', background: '#F7FBFA' }}>
 
@@ -182,11 +167,7 @@ export default function App() {
       )}
 
       {view === 'rules' && isAdmin && (
-        <RulesDesignerPage
-          networkConfig={networkConfig}
-          onBack={() => setView('dashboard')}
-          onSave={handleRulesSave}
-        />
+        <RulesDesignerPage onBack={() => setView('dashboard')} />
       )}
 
       {view === 'deploy' && isAdmin && (

@@ -25,7 +25,7 @@ test('iinot-demo: AND(employer, regulator), insurer present but not endorsing', 
   assert.deepEqual(m.orgs.map(o => o.type), ['employer', 'regulator', 'insurer']);
   assert.equal(m.orderer.batchTimeout, '500ms');
   assert.equal(m.orderer.host, 'orderer.iinot-safety.com');
-  assert.equal(m.chaincode.label, 'safetycc_1.3');
+  assert.equal(m.chaincode.label, 'safetycc_1.4');
   assert.equal(m.paths.wallet, '/opt/tg/wallet');
 });
 

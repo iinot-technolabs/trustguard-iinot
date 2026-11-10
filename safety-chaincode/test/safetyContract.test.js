@@ -8,7 +8,9 @@ const V1_ARG_COUNTS = { InitLedger: 1, LogIncident: 7, UpdateIncidentStatus: 4, 
   // 1.2 functions — frozen
   RegisterWorkerAssignment: 5, CloseWorkerAssignment: 5, GetIncidentsByWorker: 4, GetIncidentsByDevice: 4,
   // 1.3 functions — frozen once deployed
-  SetReportability: 5, RecordStatutoryReport: 5, GetComplianceScore: 4 };
+  SetReportability: 5, RecordStatutoryReport: 5, GetComplianceScore: 4,
+  // 1.4 functions — frozen once deployed
+  SetRules: 3, GetRules: 1, GetRulesHistory: 1 };
 const h = s => crypto.createHash('sha256').update(s).digest('hex');
 const state = new Map(), hist = new Map(); let events = [];
 const ctxFor = role => ({
@@ -167,6 +169,81 @@ const bad = async (name, fn, re) => { await assert.rejects(fn, re); pass++; cons
     const r = JSON.parse(await c.GetComplianceScore(A, D0, at(D0, 15), ASOF)); assert.strictEqual(r.overall.incidents, 2); });
   await ok('no incidents → score null, grade N/A', async () => {
     const r = JSON.parse(await c.GetComplianceScore(A, '2030-01-01T00:00:00Z', '', ASOF)); assert.deepStrictEqual([r.overall.score, r.overall.grade], [null, 'N/A']); });
+
+  // ── 1.4 network rules (a fresh ctx per call, as Fabric gives each transaction its own) ──
+  const fresh = (role, msp = 'EmployerMSP', admin = false) => { const x = ctxFor(role);
+    x.clientIdentity.getMSPID = () => msp;
+    x.clientIdentity.getID = () => admin ? `x509::/C=IN/O=Hyperledger/OU=admin/CN=orgadmin::/C=IN/CN=ca.${msp}` : `x509::/C=IN/OU=client/CN=${role}1::/C=IN/CN=ca.${msp}`;
+    return x; };
+  const ADM = () => fresh(undefined, 'EmployerMSP', true), RADM = () => fresh(undefined, 'RegulatorMSP', true), IADM = () => fresh(undefined, 'InsurerMSP', true);
+  const R1 = { adminMsps: ['EmployerMSP', 'RegulatorMSP'],
+    eventTypes: [{ name: 'SOS', riskScore: 10, statutory: 'Factories Act s.88' }, { name: 'FALL', riskScore: 9 }, { name: 'GasAlert', riskScore: 8, statutory: 'Factories Act s.41B' }],
+    access: { resolve: ['supervisor'], incidentHistory: ['auditor', 'supervisor'] } };
+  const RT = '2026-11-10T10:00:00Z';
+  await ok('no rules yet: GetRules returns null and built-in roles', async () => {
+    const r = JSON.parse(await c.GetRules(fresh('auditor'))); assert.strictEqual(r.rules, null);
+    assert.deepStrictEqual(r.effective.incidentHistory.allowed, ['auditor', 'supervisor', 'claims-reviewer']); });
+  await bad('supervisor (not an org admin) cannot set rules', () => c.SetRules(fresh('supervisor'), JSON.stringify(R1), RT), /only an organisation admin/);
+  await bad('admin must be in adminMsps', () => c.SetRules(IADM(), JSON.stringify(R1), RT), /must include the caller/);
+  await bad('rules cannot widen built-in roles', () => c.SetRules(ADM(), JSON.stringify({ ...R1, access: { resolve: ['claims-reviewer'] } }), RT), /cannot be allowed/);
+  await bad('unknown access group rejected', () => c.SetRules(ADM(), JSON.stringify({ ...R1, access: { deleteAll: ['any'] } }), RT), /unknown access group/);
+  await bad('riskScore outside 1–10 rejected', () => c.SetRules(ADM(), JSON.stringify({ ...R1, eventTypes: [{ name: 'SOS', riskScore: 11 }] }), RT), /riskScore/);
+  await bad('duplicate event type rejected', () => c.SetRules(ADM(), JSON.stringify({ ...R1, eventTypes: [{ name: 'SOS', riskScore: 9 }, { name: 'sos', riskScore: 8 }] }), RT), /listed twice/);
+  await ok('employer admin sets rules v1', async () => { const r = JSON.parse(await c.SetRules(ADM(), JSON.stringify(R1), RT)); assert.strictEqual(r.version, 1); assert.strictEqual(r.setByMsp, 'EmployerMSP'); });
+  await bad('insurer admin cannot change rules (not in adminMsps)', () => c.SetRules(IADM(), JSON.stringify({ ...R1, adminMsps: ['InsurerMSP'] }), RT), /not allowed to change/);
+  await ok('claims-reviewer loses incident history under rules v1', async () => {
+    await assert.rejects(() => c.GetIncidentHistory(fresh('claims-reviewer', 'InsurerMSP'), 'CS-1'), /Access denied by network rules v1/);
+    JSON.parse(await c.GetIncidentHistory(fresh('auditor', 'RegulatorMSP'), 'CS-1')); });
+  await ok('FALL (rule score 9) classified CRITICAL: risk raised from 50 to the floor 90, original kept', async () => {
+    const r = JSON.parse(await c.LogIncident(fresh('gateway'), 'R-1', 'loneworker-1', 'fall', H, '2026-11-10T10:01:00Z', '50'));
+    assert.deepStrictEqual([r.riskScore, r.classification.severity, r.classification.reportedRiskScore, r.classification.rulesVersion], ['90', 'CRITICAL', '50', 1]); });
+  await ok('SOS keeps a higher gateway score; statutory reference attached', async () => {
+    const r = JSON.parse(await c.LogIncident(fresh('gateway'), 'R-2', 'loneworker-1', 'SOS', H, '2026-11-10T10:02:00Z', '100'));
+    assert.deepStrictEqual([r.riskScore, r.classification.statutory, r.classification.reportedRiskScore], ['100', 'Factories Act s.88', undefined]); });
+  await ok('unknown event type still recorded, marked UNCLASSIFIED', async () => {
+    const r = JSON.parse(await c.LogIncident(fresh('gateway'), 'R-3', 'loneworker-1', 'INACTIVITY', H, '2026-11-10T10:03:00Z', '70'));
+    assert.deepStrictEqual([r.status, r.riskScore, r.classification.severity], ['TRIGGERED', '70', 'UNCLASSIFIED']); });
+  await ok('regulator admin sets v2: auditor loses list-all and history', async () => {
+    const r = JSON.parse(await c.SetRules(RADM(), JSON.stringify({ eventTypes: R1.eventTypes, access: { incidentHistory: ['supervisor'], listAllIncidents: ['supervisor'] } }), '2026-11-10T11:00:00Z'));
+    assert.deepStrictEqual([r.version, r.adminMsps], [2, ['EmployerMSP', 'RegulatorMSP']]);
+    await assert.rejects(() => c.GetAllIncidents(fresh('auditor', 'RegulatorMSP')), /network rules v2/);
+    JSON.parse(await c.GetAllIncidents(fresh('supervisor'))); });
+  await ok('"any" keeps the built-in roles; rules history lists v1, v2, v3; no event types = no classification', async () => {
+    await c.SetRules(ADM(), JSON.stringify({ eventTypes: [], access: { listAllIncidents: ['any'] } }), '2026-11-10T12:00:00Z');
+    JSON.parse(await c.GetAllIncidents(fresh('auditor', 'RegulatorMSP')));
+    await assert.rejects(() => c.GetAllIncidents(fresh('claims-reviewer', 'InsurerMSP')), /Access denied: role/);
+    const h = JSON.parse(await c.GetRulesHistory(fresh('auditor'))); assert.deepStrictEqual(h.map(x => x.value.version), [1, 2, 3]);
+    const r = JSON.parse(await c.LogIncident(fresh('gateway'), 'R-4', 'd', 'SOS', H, '2026-11-10T12:01:00Z', '95')); assert.strictEqual(r.classification, undefined); });
+  // escalation levels, response targets and report types in the rules
+  const R4 = { eventTypes: [], access: {}, escalation: { levels: [{ afterMinutes: 2 }, { afterMinutes: 10 }] },
+               targets: { ackMinutes: 10, resolveHours: 48 },
+               reportTypes: [{ code: 'FORM18', name: 'Form 18', deadlineHours: 12 }, { code: 'ANNEX-1', name: 'Annexure I (state form)', deadlineHours: 24 }] };
+  await bad('escalation levels must get later', () => c.SetRules(ADM(), JSON.stringify({ ...R4, escalation: { levels: [{ afterMinutes: 10 }, { afterMinutes: 5 }] } }), RT), /must come later/);
+  await bad('report type code checked', () => c.SetRules(ADM(), JSON.stringify({ ...R4, reportTypes: [{ code: 'f', name: 'x', deadlineHours: 12 }] }), RT), /code/);
+  await ok('rules v4 with escalation 2/10 min, targets 10 min / 48 h, two report types', async () => {
+    const r = JSON.parse(await c.SetRules(ADM(), JSON.stringify(R4), '2026-11-10T13:00:00Z'));
+    assert.deepStrictEqual([r.version, r.escalation.levels.map(l => l.level), r.reportTypes.map(x => x.code)], [4, [1, 2], ['FORM18', 'ANNEX-1']]);
+    const g = JSON.parse(await c.GetRules(fresh('auditor'))); assert.strictEqual(g.policy.escalationEnforced, true); });
+  const E0 = '2026-11-10T13:10:00Z', at2 = m => new Date(Date.parse(E0) + m * 60000).toISOString();
+  await c.LogIncident(fresh('gateway'), 'E-1', 'loneworker-1', 'SOS', H, E0, '95');
+  await bad('automatic escalation at 1 min refused (level 1 due at 2)', () => c.EscalateIncident(fresh('gateway'), 'E-1', 'auto', at2(1)), /Too early: level 1/);
+  await ok('automatic L1 at 3 min', async () => { assert.strictEqual(JSON.parse(await c.EscalateIncident(fresh('gateway'), 'E-1', 'auto', at2(3))).escalationLevel, 1); });
+  await bad('automatic L2 at 5 min refused (due at 10)', () => c.EscalateIncident(fresh('gateway'), 'E-1', 'auto', at2(5)), /Too early: level 2/);
+  await ok('automatic L2 at 11 min', async () => { assert.strictEqual(JSON.parse(await c.EscalateIncident(fresh('gateway'), 'E-1', 'auto', at2(11))).escalationLevel, 2); });
+  await bad('no automatic level 3 (rules have 2 levels)', () => c.EscalateIncident(fresh('gateway'), 'E-1', 'auto', at2(300)), /no escalation level 3/);
+  await ok('a supervisor can still escalate by hand', async () => { assert.strictEqual(JSON.parse(await c.EscalateIncident(fresh('supervisor'), 'E-1', 'manual: site manager called', at2(12))).escalationLevel, 3); });
+  await bad('report type not in the rules refused', () => c.RecordStatutoryReport(fresh('supervisor'), 'E-1', 'FORM99', H, at2(60)), /one of FORM18, ANNEX-1/);
+  await ok('state form ANNEX-1 at 20 h is within its 24 h deadline', async () => {
+    const r = JSON.parse(await c.RecordStatutoryReport(fresh('supervisor'), 'E-1', 'ANNEX-1', H, at2(20 * 60)));
+    const e = r.statutoryReports[0]; assert.deepStrictEqual([e.withinDeadline, e.deadlineHours, e.rulesVersion], [true, 24, 4]); });
+  await ok('compliance score uses the targets and lists them', async () => {
+    const r = JSON.parse(await c.GetComplianceScore(fresh('auditor'), E0, '', at2(3 * 24 * 60)));
+    assert.deepStrictEqual([r.rulesVersion, r.targets.ackMinutes, r.targets.escalateToLevel2AfterMinutes], [4, 10, 10]);
+    const m = Object.fromEntries(r.overall.metrics.map(x => [x.key, x]));
+    assert.deepStrictEqual([m.ack5.label, m.resolved24.label, m.form18.label], ['Acknowledged within 10 min', 'Resolved with outcome within 48 h', 'Statutory report filed within its deadline']);
+    assert.deepStrictEqual([m.form18.met, m.form18.eligible], [1, 1]); });
+  await ok('rules key is not returned as an incident', async () => {
+    const all = JSON.parse(await c.GetAllIncidents(fresh('supervisor'))); assert.ok(all.every(i => i.docType === 'incident')); });
 
   console.log(`\n${pass} checks passed; events: ${[...new Set(events.map(e => e[0]))].join(', ')}`);
 })().catch(e => { console.error('FAIL:', e.message); process.exit(1); });

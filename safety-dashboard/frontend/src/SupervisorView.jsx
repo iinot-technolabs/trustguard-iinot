@@ -289,8 +289,11 @@ export default function SupervisorView({ session }) {
             {[
               ['Device',     selected.deviceId],
               ['Event',      selected.eventType],
-              ['Risk score', selected.riskScore],
+              ['Risk score', selected.riskScore + (selected.classification?.reportedRiskScore ? ` (raised from ${selected.classification.reportedRiskScore} by the network rules)` : '')],
               ...(riskDrivers(selected) ? [['Risk drivers', riskDrivers(selected)]] : []),
+              ...(selected.classification ? [['Classification', selected.classification.severity === 'UNCLASSIFIED'
+                ? `UNCLASSIFIED: event type not in network rules v${selected.classification.rulesVersion}`
+                : `${selected.classification.severity}${selected.classification.statutory ? ` · ${selected.classification.statutory}` : ''} · rules v${selected.classification.rulesVersion}`]] : []),
               ['Status',     selected.status],
               ...(selected.escalationLevel ? [['Escalation', `Level ${selected.escalationLevel} · ${selected.escalationReason || ''}`]] : []),
               ...(selected.outcome ? [['Outcome', OUTCOME_LABEL[selected.outcome] || selected.outcome]] : []),

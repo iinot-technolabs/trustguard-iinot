@@ -24,4 +24,21 @@ function isNewAlert(inc, nowMs, policy, sinceMs) {
   return Number.isFinite(t) && t >= sinceMs && (nowMs - t) / 60000 <= policy.notifyNewWithinMinutes;
 }
 
-module.exports = { nextStep, isNewAlert, OPEN };
+// Levels in force: the escalation levels stored in the network rules on the ledger (chaincode 1.4,
+// Rules Designer) when there are any, otherwise policy.json. Timings come from the rules (the chaincode
+// refuses an automatic escalation before its time); the reason text and who is notified stay in
+// policy.json, matched by level number (a level beyond policy.json uses the last one's groups).
+function effectivePolicy(policy, ledgerRules) {
+  const levels = ledgerRules && ledgerRules.escalation && ledgerRules.escalation.levels;
+  if (!levels || !levels.length) return { ...policy, source: 'policy.json' };
+  const fmt = m => (m % 60 === 0 && m >= 60 ? `${m / 60} h` : `${m} min`);
+  const merged = levels.map(l => {
+    const p = policy.levels.find(x => x.level === l.level) || policy.levels[policy.levels.length - 1] || { notify: ['supervisors'] };
+    const reason = p.level === l.level && p.afterMinutes === l.afterMinutes && p.reason
+      ? p.reason : `Unacknowledged for ${fmt(l.afterMinutes)} (escalation level ${l.level}, network rules v${ledgerRules.version})`;
+    return { level: l.level, afterMinutes: l.afterMinutes, ...(l.minRisk !== undefined ? { minRisk: l.minRisk } : {}), reason, notify: p.notify || ['supervisors'] };
+  });
+  return { ...policy, levels: merged, source: `network rules v${ledgerRules.version}` };
+}
+
+module.exports = { nextStep, isNewAlert, effectivePolicy, OPEN };

@@ -16,7 +16,7 @@ const path     = require('path');
 const Database = require('better-sqlite3');
 const grpc     = require('@grpc/grpc-js');
 const { connect, signers } = require('@hyperledger/fabric-gateway');
-const { nextStep, isNewAlert } = require('./escalation/policy');
+const { nextStep, isNewAlert, effectivePolicy } = require('./escalation/policy');
 const notify = require('./escalation/notify');
 
 // optional secrets (Telegram) — simple KEY=VALUE file
@@ -65,7 +65,27 @@ function message(inc, headline) {
          `${site ? `\n${site.name}` : ''}\nRaised ${ist} IST · ${inc.incidentId}\n${POLICY.dashboardUrl}`;
 }
 
+// Escalation levels from the network rules on the ledger (chaincode 1.4), re-read every 5 minutes
+let ACTIVE = POLICY, rulesReadAt = 0;
+async function refreshPolicy() {
+  if (Date.now() - rulesReadAt < 300000) return;
+  rulesReadAt = Date.now();
+  try {
+    const { rules } = JSON.parse(Buffer.from(await contract().evaluateTransaction('GetRules')).toString('utf8'));
+    const next = effectivePolicy(POLICY, rules);
+    if (next.source !== ACTIVE.source || JSON.stringify(next.levels) !== JSON.stringify(ACTIVE.levels)) {
+      log(`Escalation levels from ${next.source}: ${next.levels.map(l => `L${l.level}@${l.afterMinutes}m${l.minRisk !== undefined ? `(risk≥${l.minRisk})` : ''}`).join(', ')}`);
+    }
+    ACTIVE = next;
+  } catch (e) {
+    const m = errText(e);
+    if (/GetRules|not found|does not exist/i.test(m)) { if (ACTIVE !== POLICY) log('No GetRules on this chaincode: using policy.json'); ACTIVE = POLICY; }
+    else log(`✗ could not read the network rules (${m}); keeping ${ACTIVE.source || 'policy.json'}`);
+  }
+}
+
 async function scan(db) {
+  await refreshPolicy();
   const since = db.prepare(`SELECT value FROM escalation_meta WHERE key='since'`).get().value;
   const sinceMs = Date.parse(since), now = Date.now();
   const from = new Date(Math.max(sinceMs, now - POLICY.maxAgeHours * 3600e3)).toISOString();
@@ -84,13 +104,13 @@ async function scan(db) {
       log(`🚨 new ${inc.eventType} ${id} (${inc.deviceId}, risk ${inc.riskScore}) → ${r.channel}${r.sent ? ` ×${r.sent}` : ''}`);
     }
 
-    const step = nextStep(inc, now, POLICY, sinceMs);
+    const step = nextStep(inc, now, ACTIVE, sinceMs);
     if (!step) continue;
     try {
       await contract().submitTransaction('EscalateIncident', id, step.reason, new Date().toISOString());
     } catch (e) {
       const m = errText(e);
-      if (/cannot change to ESCALATED|MVCC/.test(m)) { log(`↷ ${id}: ${m.split(',').pop().trim()} — skipped`); continue; } // acknowledged meanwhile
+      if (/cannot change to ESCALATED|MVCC|Too early|no escalation level|needs risk/.test(m)) { log(`↷ ${id}: ${m.split(',').pop().trim()} — skipped`); continue; } // acknowledged meanwhile
       if (/UNAVAILABLE|DEADLINE/.test(m)) resetFabric();
       log(`✗ escalate ${id} L${step.level} failed: ${m}`); continue;
     }
@@ -112,7 +132,7 @@ async function main() {
   const db = openDb();
   const since = db.prepare(`SELECT value FROM escalation_meta WHERE key='since'`).get().value;
   const tg = process.env.TELEGRAM_BOT_TOKEN ? `Telegram on (${notify.chatIds(['supervisors', 'safetyOfficer', 'regulator']).length} chats)` : 'Telegram off (log only)';
-  log(`Escalation service: levels ${POLICY.levels.map(l => `L${l.level}@${l.afterMinutes}m`).join(', ')}; incidents since ${since}; ${tg}`);
+  log(`Escalation service: policy.json levels ${POLICY.levels.map(l => `L${l.level}@${l.afterMinutes}m`).join(', ')} (the network rules on the ledger override them when set); incidents since ${since}; ${tg}`);
   const loop = async () => {
     try { await scan(db); } catch (e) { log('✗ scan error:', errText(e)); }
     if (!ONCE) setTimeout(loop, POLICY.scanIntervalSec * 1000);

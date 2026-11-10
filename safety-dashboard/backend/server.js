@@ -21,6 +21,7 @@ app.use(cors({
            ...(process.env.CORS_ORIGINS || '').split(',').map(s => s.trim()).filter(Boolean)],
 }));
 
+app.use('/api/reports', express.json({ limit: '12mb' }));   // filed statutory forms (≤ 8 MB, base64) — TG-028
 app.use(express.json({ limit: '1mb' }));
 
 // ── Public routes ────────────────────────────────────────────────────────────
@@ -60,6 +61,7 @@ app.use('/api/network-config', requireAuth('admin'), require('./routes/networkCo
 app.use('/api/generate-configs', requireAuth('admin'));
 app.use('/api', require('./routes/generateConfigsRoute'));   // defines POST /generate-configs
 app.use('/api/deploy', requireAuth('admin'), require('./routes/deploy'));
+app.use('/api/rules',  requireAuth('admin'), require('./routes/rules'));   // Rules Designer (TG-028)
 
 // ── Start ────────────────────────────────────────────────────────────────────
 const server = app.listen(PORT, process.env.BIND_HOST || '127.0.0.1', () => {

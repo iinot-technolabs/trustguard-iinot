@@ -10,20 +10,21 @@ const fmt = ts => ts ? new Date(ts).toLocaleString('en-IN', { dateStyle: 'medium
 const cn = id => (String(id || '').match(/CN=([^/:]+)/) || [])[1] || ''
 
 // Reporting status of an incident, from its ledger record
-export function reportStatus(inc, now = Date.now()) {
-  const filed = (inc.statutoryReports || []).filter(r => r.reportType === 'FORM18')
+export function reportStatus(inc, now = Date.now(), deadlineH = DEADLINE_H) {
+  const filed = inc.statutoryReports || []          // any report type (Form 18 or a state's own form, chaincode 1.4)
   if (filed.length) {
     const first = filed[0]
+    const tag = first.reportType === 'FORM18' ? '' : ` ${first.reportType}`
     return { key: 'filed', tone: first.withinDeadline ? 'ok' : 'late',
-             label: `Filed${filed.length > 1 ? ` v${filed.length}` : ''} · ${first.withinDeadline ? 'on time' : 'late'}` }
+             label: `Filed${tag}${filed.length > 1 ? ` (${filed.length})` : ''} · ${first.withinDeadline ? 'on time' : 'late'}` }
   }
   if (inc.reportability?.decision === 'NOT_REPORTABLE') return { key: 'nr', tone: 'muted', label: 'Not reportable', detail: inc.reportability.reason }
   const reportable = inc.reportability ? inc.reportability.decision === 'REPORTABLE' : inc.outcome === 'GENUINE'
   if (!reportable) return { key: 'none', tone: 'muted', label: '—' }
-  const left = Date.parse(inc.timestamp) + DEADLINE_H * 3600000 - now
-  if (left <= 0) return { key: 'overdue', tone: 'bad', label: 'Form 18 overdue' }
+  const left = Date.parse(inc.timestamp) + deadlineH * 3600000 - now
+  if (left <= 0) return { key: 'overdue', tone: 'bad', label: 'Report overdue' }
   const h = Math.floor(left / 3600000), m = Math.floor((left % 3600000) / 60000)
-  return { key: 'due', tone: 'warn', label: `Form 18 due in ${h} h ${m} min` }
+  return { key: 'due', tone: 'warn', label: `Report due in ${h} h ${m} min` }
 }
 export const TONE = {
   ok:    { bg: '#EAF6F4', text: '#028090' },

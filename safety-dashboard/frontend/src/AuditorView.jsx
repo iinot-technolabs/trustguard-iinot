@@ -4,6 +4,7 @@ import SiteConditions from './SiteConditions'
 import { riskDrivers } from './SupervisorView'
 import ComplianceCard from './ComplianceCard'
 import Form18Modal, { StatusBadge } from './Form18'
+import { ReportsModal } from './ReportFilings'
 import { useNetworkInfo, orgLabel } from './networkInfo'
 import { trailLabel } from './trail'
 
@@ -24,6 +25,7 @@ export default function AuditorView({ session }) {
   const [loading,   setLoading]   = useState(true)
   const [filter,    setFilter]    = useState('ALL')
   const [form18,    setForm18]    = useState(null)
+  const [reports,   setReports]   = useState(null)   // incident whose filed reports are listed (any type)
 
   const headers = { 'x-identity': session.identity }
 
@@ -109,7 +111,7 @@ export default function AuditorView({ session }) {
             }}>
               <thead>
                 <tr style={{ background: '#F8FAFC' }}>
-                  {['Incident ID','Device','Type','Risk','Status','Outcome','Form 18','Timestamp','Actions'].map(h => (
+                  {['Incident ID','Device','Type','Risk','Status','Outcome','Statutory report','Timestamp','Actions'].map(h => (
                     <th key={h} style={{
                       padding: '10px 14px', textAlign: 'left',
                       color: '#64748B', fontWeight: 600,
@@ -149,7 +151,7 @@ export default function AuditorView({ session }) {
                         {{ GENUINE: 'Genuine', NEAR_MISS: 'Near miss', FALSE_ALARM: 'False alarm' }[inc.outcome] || '—'}
                       </td>
                       <td style={{ padding: '10px 14px' }}>
-                        <StatusBadge inc={inc} onClick={(inc.statutoryReports || []).length ? () => setForm18(inc.incidentId) : undefined} />
+                        <StatusBadge inc={inc} onClick={(inc.statutoryReports || []).length ? () => setReports(inc) : undefined} />
                       </td>
                       <td style={{ padding: '10px 14px', color: '#64748B', fontSize: '12px' }}>
                         {new Date(inc.timestamp).toLocaleString()}
@@ -219,6 +221,8 @@ export default function AuditorView({ session }) {
           </div>
         )}
       </div>
+      {reports && <ReportsModal incident={reports} onClose={() => setReports(null)}
+                                onOpenForm18={() => { setForm18(reports.incidentId); setReports(null) }} />}
       {form18 && <Form18Modal incidentId={form18} readOnly onClose={() => setForm18(null)} />}
     </div>
   )

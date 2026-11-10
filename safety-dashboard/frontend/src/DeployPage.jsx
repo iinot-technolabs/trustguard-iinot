@@ -11,6 +11,7 @@ const DEPLOY_STEPS = [
   { id: 'network',   label: 'Peers & Orderer',  patterns: ['starting orderer and peers', 'network is up'] },
   { id: 'channel',   label: 'Channel',          patterns: ['creating genesis block', 'joining ', "channel '"] },
   { id: 'chaincode', label: 'Chaincode',        patterns: ['packaging ', 'installing ', 'approving for', 'committing ', 'committed definition matches'] },
+  { id: 'rules',     label: 'Rules',            patterns: ['setting the network rules', 'network rules v'] },
   { id: 'wallet',    label: 'Wallet',           patterns: ['wallet:', 'app identities in'] },
   { id: 'done',      label: 'Complete',         patterns: ['deployment complete', 'network.sh all finished'] },
 ];

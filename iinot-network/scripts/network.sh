@@ -9,8 +9,9 @@
 #   up          generate + start CAs, register/enrol identities, start orderer and peers
 #   channel     create the channel and join the orderer and every peer
 #   deploy      package, install, approve (with the endorsement policy) and commit the chaincode
+#   rules       store the Rules Designer rules on the channel (chaincode 1.4 SetRules; defaults if none saved)
 #   identities  enrol the app users (gateway, supervisor, auditor, oracle, claims-reviewer) into the wallet
-#   all         generate + up + channel + deploy + identities
+#   all         generate + up + channel + deploy + rules + identities
 #   status      containers, channel membership and the committed chaincode definition
 #   down        stop everything and delete this network's crypto material, ledgers and wallet entries
 #
@@ -281,6 +282,42 @@ verifyCommitted() {
     infoln "Committed definition matches: ${CC_VERSION}, sequence ${CC_SEQUENCE}, endorsers from config."
 }
 
+# Store the Rules Designer rules on the channel (chaincode 1.4 SetRules, TG-028). Signed by the first
+# endorsing organisation's admin and endorsed like any write, so a rule change needs every endorser.
+# Rules come from config/network-config.json "rules" (defaults if none are saved yet).
+applyRules() {
+    loadConfig
+    local payload
+    payload="$("${NODE_BIN}" "${TG_HOME}/safety-dashboard/backend/scripts/rulesJson.js" "${CONFIG_FILE}")" || { errorln "Rules are not valid; nothing was changed."; return 1; }
+    local ORDERER_CA; ORDERER_CA="$(ordererTlsCa)"
+    local i first=-1 PEERFLAGS=()
+    for i in $(seq 0 $((ORG_COUNT - 1))); do
+        [ "${ORG_ENDORSES[$i]}" = "true" ] || continue
+        [ "${first}" -lt 0 ] && first=${i}
+        PEERFLAGS+=(--peerAddresses "localhost:${ORG_PEER_PORTS[$i]}"
+                    --tlsRootCertFiles "${NETWORK_ROOT}/organizations/peerOrganizations/${ORG_DOMAINS[$i]}/peers/${ORG_PEER_HOSTS[$i]}/tls/ca.crt")
+    done
+    [ "${first}" -ge 0 ] || { errorln "No endorsing organisation in the config."; return 1; }
+    setPeerEnv "${first}"
+    local args; args="$(jq -nc --arg r "${payload}" --arg t "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '{function:"SetRules",Args:[$r,$t]}')"
+    infoln "Setting the network rules on '${CHANNEL_NAME}' as the ${ORG_MSPIDS[$first]} admin (endorsed by every endorsing org)..."
+    local out
+    if ! out=$(peer chaincode invoke -o "localhost:${ORDERER_PORT}" --ordererTLSHostnameOverride "${ORDERER_HOST}" --tls --cafile "${ORDERER_CA}"                -C "${CHANNEL_NAME}" -n "${CC_NAME}" "${PEERFLAGS[@]}" -c "${args}" --waitForEvent 2>&1); then
+        if grep -q "SetRules" <<<"${out}" && grep -qiE "not found|does not exist" <<<"${out}"; then
+            errorln "The chaincode on this channel has no SetRules: it is older than safetycc 1.4. Redeploy with 1.4."
+        else
+            errorln "SetRules failed: $(grep -oE 'message:[^]]*|Error: .*' <<<"${out}" | tail -1)"
+        fi
+        return 1
+    fi
+    local now
+    now="$(peer chaincode query -C "${CHANNEL_NAME}" -n "${CC_NAME}" -c '{"Args":["GetRules"]}')" || return 1
+    jq -c '.rules | {version, eventTypes: [.eventTypes[] | "\(.name)=\(.riskScore)"], restricted: .access,
+           escalationMinutes: ((.escalation // {levels: []}).levels | map(.afterMinutes)), targets,
+           reports: ((.reportTypes // []) | map("\(.code) \(.deadlineHours)h")), admins: .adminMsps}' <<<"${now}"
+    successln "Network rules v$(jq -r .rules.version <<<"${now}") are in force on '${CHANNEL_NAME}'."
+}
+
 enrollIdentities() {
     loadConfig
     . scripts/registerEnroll.sh
@@ -351,6 +388,7 @@ case "$1" in
     channel)    createChannel ;;
     deploy)     deployChaincode ;;
     identities) enrollIdentities ;;
+    rules)      applyRules ;;
     status)     networkStatus ;;
     down)       networkDown "$2" ;;
     all)
@@ -359,11 +397,12 @@ case "$1" in
         networkUp
         createChannel
         deployChaincode
+        applyRules
         enrollIdentities
         successln "Deployment complete. Network is ready."
         ;;
     *)
-        echo "Usage: ./scripts/network.sh [generate|up|channel|deploy|identities|all|status|down [-y]]"
+        echo "Usage: ./scripts/network.sh [generate|up|channel|deploy|rules|identities|all|status|down [-y]]"
         exit 1
         ;;
 esac

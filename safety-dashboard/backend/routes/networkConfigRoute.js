@@ -9,9 +9,9 @@
  */
 const express = require('express');
 const fs      = require('fs');
-const path    = require('path');
 const { buildModel, ConfigError } = require('../lib/networkModel');
 const { CONFIG_FILE, TG_HOME } = require('../lib/paths');
+const { writeConfig } = require('../lib/configFile');
 
 const router = express.Router();
 
@@ -58,10 +58,7 @@ router.post('/validate', (req, res) => {
 router.post('/', (req, res) => {
   try {
     const model = check(req.body);
-    fs.mkdirSync(path.dirname(CONFIG_FILE), { recursive: true });
-    const tmp = `${CONFIG_FILE}.tmp-${process.pid}`;
-    fs.writeFileSync(tmp, JSON.stringify(req.body, null, 2));
-    fs.renameSync(tmp, CONFIG_FILE);
+    writeConfig(req.body);                                       // keeps the saved Rules Designer rules
     res.json({ ok: true, summary: summarize(model) });
   } catch (err) {
     if (err instanceof ConfigError) return res.status(400).json({ ok: false, problems: err.problems });

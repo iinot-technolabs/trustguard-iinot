@@ -76,6 +76,15 @@ export default function AdminView({ onNavigate }) {
           <button style={btn('#00A896')} onClick={() => onNavigate('deploy')}>Open Deploy →</button>
         </div>
 
+        <div style={card('#7C3AED')}>
+          <div style={{ fontWeight: 700, fontSize: '16px', color: '#1E293B' }}>Rules</div>
+          <div style={{ fontSize: '13px', color: '#64748B', flexGrow: 1 }}>
+            Event types (severity, statutory reference, risk floor) and who may call each chaincode function.
+            Stored on the channel and enforced by the chaincode; change them on a running network.
+          </div>
+          <button style={btn('#7C3AED')} onClick={() => onNavigate('rules')}>Open Rules Designer →</button>
+        </div>
+
         <div style={card('#0077B6')}>
           <div style={{ fontWeight: 700, fontSize: '16px', color: '#1E293B' }}>3 · Enroll identities</div>
           <div style={{ fontSize: '13px', color: '#64748B', flexGrow: 1 }}>

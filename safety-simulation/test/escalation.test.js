@@ -1,7 +1,7 @@
 // node test/escalation.test.js — escalation policy checks (TG-016)
 const assert = require('assert');
 const policy = require('../escalation/policy.json');
-const { nextStep, isNewAlert } = require('../escalation/policy');
+const { nextStep, isNewAlert, effectivePolicy } = require('../escalation/policy');
 const T0 = Date.parse('2026-10-26T13:00:00Z'), since = T0 - 3600e3, min = m => T0 + m * 60000;
 const inc = (o = {}) => ({ incidentId: 'CS-1', status: 'TRIGGERED', timestamp: new Date(T0).toISOString(), riskScore: '95', ...o });
 let n = 0; const eq = (name, got, want) => { assert.deepStrictEqual(got, want, name); n++; console.log('  ✓', name); };
@@ -21,4 +21,13 @@ eq('bad timestamp: ignored', nextStep(inc({ timestamp: 'x' }), min(30), policy, 
 eq('new alert within 10 min', isNewAlert(inc(), min(2), policy, since), true);
 eq('no new alert after 10 min', isNewAlert(inc(), min(11), policy, since), false);
 eq('no new alert once acknowledged', isNewAlert(inc({ status: 'ACKNOWLEDGED' }), min(1), policy, since), false);
+// Levels from the network rules on the ledger (chaincode 1.4)
+eq('no rules: policy.json', effectivePolicy(policy, null).source, 'policy.json');
+const ep = effectivePolicy(policy, { version: 4, escalation: { levels: [{ level: 1, afterMinutes: 5 }, { level: 2, afterMinutes: 30 }, { level: 3, afterMinutes: 120 }, { level: 4, afterMinutes: 480, minRisk: 90 }] } });
+eq('rules levels and timings used', ep.levels.map(l => [l.level, l.afterMinutes]), [[1, 5], [2, 30], [3, 120], [4, 480]]);
+eq('same timing keeps the policy.json reason', ep.levels[0].reason, policy.levels[0].reason);
+eq('changed timing gets a generated reason', ep.levels[1].reason.startsWith('Unacknowledged for 30 min'), true);
+eq('level 4 notifies like the last policy.json level', ep.levels[3].notify, policy.levels[2].notify);
+eq('20 min at level 1 under the rules (L2 at 30): wait', nextStep(inc({ status: 'ESCALATED', escalationLevel: 1 }), min(20), ep, since), null);
+eq('2 h at level 2 under the rules: level 3', nextStep(inc({ status: 'ESCALATED', escalationLevel: 2 }), min(120), ep, since)?.level, 3);
 console.log(`escalation policy: ${n} checks passed`);

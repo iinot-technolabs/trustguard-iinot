@@ -79,9 +79,17 @@ export default function ComplianceCard({ onOpenIncident }) {
         </div>
       )}
 
+      {data?.targets && (
+        <div style={{ marginTop: '8px', fontSize: '11px', color: '#64748B' }}>
+          Targets: acknowledge ≤ {data.targets.ackMinutes} min · level 2 not before {data.targets.escalateToLevel2AfterMinutes} min ·
+          resolve ≤ {data.targets.resolveHours} h · {data.targets.reportTypes.map(r => `${r.code} ≤ ${r.deadlineHours} h`).join(', ')}
+          {data.rulesVersion ? ` · network rules v${data.rulesVersion}` : ' · built-in'}
+        </div>
+      )}
+
       {o && o.form18DueSoon.length > 0 && (
         <div style={{ marginTop: '10px', background: '#FFF8E6', color: '#B7791F', borderRadius: '6px', padding: '6px 10px', fontSize: '12px' }}>
-          ⏱ Form 18 still to file within 12 h: {o.form18DueSoon.map(id => (
+          ⏱ {(data.targets?.reportTypes || [{ code: 'FORM18' }])[0].code === 'FORM18' ? 'Form 18' : 'Statutory report'} still to file within {(data.targets?.reportTypes || [{ deadlineHours: 12 }])[0].deadlineHours} h: {o.form18DueSoon.map(id => (
             <button key={id} onClick={() => onOpenIncident && onOpenIncident(id)} style={{ fontFamily: 'monospace', background: 'none', border: 'none', color: '#B7791F', textDecoration: 'underline', cursor: 'pointer', fontSize: '12px' }}>{id}</button>))}
         </div>
       )}
