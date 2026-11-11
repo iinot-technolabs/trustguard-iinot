@@ -1,0 +1,57 @@
+{
+  "_comment": "Two-host proof (TG-031): the employer and the orderer on one host, the regulator on its own host, so the regulator's keys never leave it. Names and ports differ from the demo networks so it can run beside them on the test VM. Each host also needs config/host.json (see docs/TWO_HOST.md).",
+  "network": {
+    "name": "TrustGuard Two-Host Proof",
+    "channel": "tg-twohost-channel",
+    "genesisProfile": "TwoHostGenesis",
+    "dockerNetworkName": "tg_twohost",
+    "bindAddress": "127.0.0.1",
+    "fabricVersion": "2.5.15",
+    "fabricCAVersion": "1.5.17"
+  },
+  "orderer": {
+    "mspId": "TwoHostOrdererMSP",
+    "domain": "orderer.twohost.trustguard.in",
+    "port": 27050,
+    "adminPort": 27053,
+    "operationsPort": 29443,
+    "caPort": 29054,
+    "caName": "ca-twohost-orderer",
+    "caFolderName": "twohost-orderer",
+    "batchTimeout": "500ms"
+  },
+  "organizations": [
+    {
+      "id": "TwoHostEmployerMSP",
+      "name": "Employer / Factory Owner",
+      "type": "employer",
+      "endorses": true,
+      "domain": "employer.twohost.trustguard.in",
+      "peerPort": 27051, "chaincodePort": 27052, "operationsPort": 37051,
+      "caPort": 27054, "caName": "ca-twohost-employer", "caFolderName": "twohost-employer",
+      "roles": [
+        { "name": "gateway1",    "attrs": "role.gateway:ecert" },
+        { "name": "supervisor1", "attrs": "role.supervisor:ecert" }
+      ]
+    },
+    {
+      "id": "TwoHostRegulatorMSP",
+      "name": "Inspector of Factories",
+      "type": "regulator",
+      "endorses": true,
+      "domain": "regulator.twohost.trustguard.in",
+      "peerPort": 28051, "chaincodePort": 28052, "operationsPort": 38051,
+      "caPort": 28054, "caName": "ca-twohost-regulator", "caFolderName": "twohost-regulator",
+      "roles": [
+        { "name": "auditor1", "attrs": "role.auditor:ecert" }
+      ]
+    }
+  ],
+  "chaincode": {
+    "name": "safetycc",
+    "version": "1.4",
+    "sequence": 1,
+    "path": "safety-chaincode",
+    "lang": "node"
+  }
+}

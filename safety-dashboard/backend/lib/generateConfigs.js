@@ -13,6 +13,13 @@
  *   <network-root>/config/secrets/secrets.json    CA / admin / user enrolment secrets (0600, created once, kept)
  *   <network-root>/config/secrets/compose.env     CA bootstrap passwords for docker compose (0600)
  *
+ * Two or more hosts (optional, TG-031): <network-root>/config/host.json says which organisations (and
+ * whether the orderer) run on THIS host, and the address of the host that runs each of the others.
+ * Then only this host's CAs, peers and orderer go into docker-compose.yaml, the other hosts' node
+ * names resolve to their addresses inside the containers (extra_hosts), and the orderer and peer
+ * ports are published on host.json's publishAddress so the other hosts can reach them. Without
+ * host.json everything runs on this host, as before.
+ *
  * No secret is printed. Exit code 2 = invalid config (problems listed on stderr).
  */
 
@@ -34,8 +41,69 @@ function writeFileAtomic(file, content, mode) {
   fs.renameSync(tmp, file);
 }
 
-function publish(m, port) {
-  return `"${m.network.bindAddress}:${port}:${port}"`;
+function publish(m, port, toOtherHosts) {
+  const addr = toOtherHosts && m.hosts ? m.hosts.publishAddress : m.network.bindAddress;
+  return `"${addr}:${port}:${port}"`;
+}
+
+// ── host layout (config/host.json, TG-031) ─────────────────────
+// {
+//   "thisHost":   { "orgs": ["IndustryMSP", "InsurerMSP"], "orderer": true, "publishAddress": "0.0.0.0" },
+//   "otherHosts": [ { "address": "203.0.113.20", "orgs": ["RegulatorMSP"], "orderer": false } ]
+// }
+// Every organisation and the orderer must be placed exactly once. Adds .local and .hostAddress to the
+// orderer and each org, and model.hosts = { publishAddress, extraHosts: [[name, address], ...] }.
+const IPV4 = /^(25[0-5]|2[0-4]\d|1?\d?\d)(\.(25[0-5]|2[0-4]\d|1?\d?\d)){3}$/;
+function applyHostLayout(model, networkRoot) {
+  const file = path.join(networkRoot, 'config', 'host.json');
+  model.orderer.local = true;
+  model.orgs.forEach(o => { o.local = true; });
+  if (!fs.existsSync(file)) { model.hosts = null; return; }
+  let h;
+  try { h = JSON.parse(fs.readFileSync(file, 'utf8')); }
+  catch (e) { throw new Error(`config/host.json is not valid JSON: ${e.message}`); }
+  const problems = [];
+  const me = h.thisHost || {};
+  const others = Array.isArray(h.otherHosts) ? h.otherHosts : [];
+  const placed = {};
+  const place = (msp, where) => {
+    if (!model.orgs.some(o => o.mspId === msp)) problems.push(`host.json names ${msp}, which is not an organisation in the network`);
+    else if (placed[msp]) problems.push(`${msp} is placed on two hosts`);
+    else placed[msp] = where;
+  };
+  (me.orgs || []).forEach(msp => place(msp, 'here'));
+  others.forEach((o, i) => {
+    if (!IPV4.test(String(o.address || ''))) problems.push(`otherHosts[${i}].address must be an IPv4 address`);
+    (o.orgs || []).forEach(msp => place(msp, o.address));
+  });
+  model.orgs.forEach(o => { if (!placed[o.mspId]) problems.push(`${o.mspId} is not placed on any host`); });
+  const ordererHosts = (me.orderer ? 1 : 0) + others.filter(o => o.orderer).length;
+  if (ordererHosts !== 1) problems.push(`the orderer must run on exactly one host (found ${ordererHosts})`);
+  const publishAddress = String(me.publishAddress || '0.0.0.0');
+  if (!IPV4.test(publishAddress)) problems.push('thisHost.publishAddress must be an IPv4 address');
+  if (!(me.orgs || []).length && !me.orderer) problems.push('thisHost runs nothing: list its orgs or set "orderer": true');
+  if (problems.length) throw new ConfigError(problems.map(x => `config/host.json: ${x}`));
+
+  const extraHosts = [];
+  model.orgs.forEach(o => {
+    o.local = placed[o.mspId] === 'here';
+    if (!o.local) { o.hostAddress = placed[o.mspId]; extraHosts.push([o.peerHost, o.hostAddress]); }
+  });
+  model.orderer.local = !!me.orderer;
+  if (!model.orderer.local) {
+    model.orderer.hostAddress = others.find(o => o.orderer).address;
+    extraHosts.push([model.orderer.host, model.orderer.hostAddress]);
+  }
+  model.hosts = { publishAddress, extraHosts };
+  model.warnings.push(`Two-host layout (config/host.json): here ${[model.orderer.local ? 'orderer' : null, ...model.orgs.filter(o => o.local).map(o => o.mspId)].filter(Boolean).join(', ')}; ` +
+    `elsewhere ${extraHosts.map(([n, a]) => `${n}@${a}`).join(', ')}. Orderer and peer ports published on ${publishAddress}: close them in the firewall to everyone but the other hosts.`);
+}
+
+function extraHostsBlock(m) {
+  if (!m.hosts || !m.hosts.extraHosts.length) return '';
+  return `
+    extra_hosts:
+${m.hosts.extraHosts.map(([n, a]) => `      - "${n}:${a}"`).join('\n')}`;
 }
 
 // ── secrets ────────────────────────────────────────────────────
@@ -47,16 +115,16 @@ function ensureSecrets(m) {
   if (fs.existsSync(file)) s = JSON.parse(fs.readFileSync(file, 'utf8'));
   s.ca = s.ca || {}; s.orgAdmin = s.orgAdmin || {}; s.peer = s.peer || {}; s.users = s.users || {}; s.orderer = s.orderer || {};
   const fill = (obj, key) => { if (!obj[key]) obj[key] = newSecret(); };
-  fill(s.ca, m.orderer.caSlug);
-  fill(s.orderer, 'node'); fill(s.orderer, 'admin');
-  m.orgs.forEach(o => {
+  // Only this host's CAs, nodes and users get secrets (all of them on a single host).
+  if (m.orderer.local !== false) { fill(s.ca, m.orderer.caSlug); fill(s.orderer, 'node'); fill(s.orderer, 'admin'); }
+  m.orgs.filter(o => o.local !== false).forEach(o => {
     fill(s.ca, o.caSlug); fill(s.orgAdmin, o.mspId); fill(s.peer, o.mspId);
     o.users.forEach(u => fill(s.users, u.name));
   });
   writeFileAtomic(file, JSON.stringify(s, null, 2) + '\n', 0o600);
 
   const composeEnv = ['# Generated by generateConfigs.js — CA bootstrap passwords. Do not commit.']
-    .concat([m.orderer, ...m.orgs].map(x => `CA_ADMIN_PW_${envKey(x.caSlug)}=${s.ca[x.caSlug]}`))
+    .concat([m.orderer, ...m.orgs].filter(x => x.local !== false).map(x => `CA_ADMIN_PW_${envKey(x.caSlug)}=${s.ca[x.caSlug]}`))
     .join('\n') + '\n';
   writeFileAtomic(path.join(m.paths.secretsDir, 'compose.env'), composeEnv, 0o600);
 }
@@ -94,7 +162,7 @@ function caService(m, x, label) {
 function generateDockerCompose(m) {
   const o = m.orderer;
   const ordMsp = `../organizations/ordererOrganizations/${o.domain}/orderers/${o.host}`;
-  const volumes = [`  ${o.host}:`, ...m.orgs.map(p => `  ${p.peerHost}:`)].join('\n');
+  const volumes = [...(o.local ? [`  ${o.host}:`] : []), ...m.orgs.filter(p => p.local).map(p => `  ${p.peerHost}:`)].join('\n');
 
   const ordererService = `
   ${o.host}:
@@ -129,8 +197,8 @@ function generateDockerCompose(m) {
       - ${ordMsp}/tls:/var/hyperledger/orderer/tls
       - ${o.host}:/var/hyperledger/production/orderer
     ports:
-      - ${publish(m, o.port)}
-      - ${publish(m, o.adminPort)}
+      - ${publish(m, o.port, true)}
+      - ${publish(m, o.adminPort)}${extraHostsBlock(m)}
     restart: unless-stopped
     logging:
       driver: json-file
@@ -140,7 +208,7 @@ function generateDockerCompose(m) {
     networks:
       - ${m.network.dockerNetwork}`;
 
-  const peerServices = m.orgs.map(p => `
+  const peerServices = m.orgs.filter(p => p.local).map(p => `
   ${p.peerHost}:
     # ${p.label} (${p.type})
     container_name: ${p.peerHost}
@@ -173,8 +241,8 @@ function generateDockerCompose(m) {
     working_dir: /root
     command: peer node start
     ports:
-      - ${publish(m, p.peerPort)}
-      - ${publish(m, p.opsPort)}
+      - ${publish(m, p.peerPort, true)}
+      - ${publish(m, p.opsPort)}${extraHostsBlock(m)}
     restart: unless-stopped
     logging:
       driver: json-file
@@ -186,7 +254,7 @@ function generateDockerCompose(m) {
 
   return `# Generated by TrustGuard IIoT generateConfigs.js — do not edit; change the network config instead.
 # Network: ${m.network.name}  |  Channel: ${m.network.channel}
-# Ports are published on ${m.network.bindAddress} only.
+# Ports are published on ${m.network.bindAddress}${m.hosts ? `; orderer and peer ports on ${m.hosts.publishAddress} for the other hosts` : ' only'}.
 # Start with:  docker compose --env-file ../config/secrets/compose.env -f docker-compose.yaml up -d
 
 volumes:
@@ -197,9 +265,9 @@ networks:
     name: ${m.network.dockerNetwork}
 
 services:
-${caService(m, m.orderer, 'Orderer CA')}
-${m.orgs.map(p => caService(m, p, `${p.label} CA`)).join('\n')}
-${ordererService}
+${o.local ? caService(m, m.orderer, 'Orderer CA') : '  # Orderer CA and orderer run on ' + o.hostAddress}
+${m.orgs.map(p => p.local ? caService(m, p, `${p.label} CA`) : `  # ${p.label} (${p.mspId}): CA and peer run on ${p.hostAddress}`).join('\n')}
+${o.local ? ordererService : ''}
 ${peerServices}
 `;
 }
@@ -394,6 +462,7 @@ function generateAppEnv(m) {
 function generate(configFile, networkRoot, log = console.log) {
   const raw = JSON.parse(fs.readFileSync(configFile, 'utf8'));
   const model = buildModel(raw, { tgHome: path.dirname(path.resolve(networkRoot)) });
+  applyHostLayout(model, networkRoot);
   model.warnings.forEach(w => log(`[WARN] ${w}`));
 
   writeFileAtomic(path.join(networkRoot, 'docker', 'docker-compose.yaml'), generateDockerCompose(model));
@@ -426,4 +495,4 @@ if (require.main === module) {
   }
 }
 
-module.exports = { generate, generateDockerCompose, generateConfigtx, generateAppEnv };
+module.exports = { generate, generateDockerCompose, generateConfigtx, generateAppEnv, applyHostLayout };

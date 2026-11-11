@@ -15,6 +15,9 @@
 # Arrays (index = org):  ORG_LABELS ORG_TYPES ORG_MSPIDS ORG_DOMAINS ORG_PEER_HOSTS
 #           ORG_PEER_PORTS ORG_CHAINCODE_PORTS ORG_OPS_PORTS ORG_CA_NAMES ORG_CA_SLUGS
 #           ORG_CA_PORTS ORG_ENDORSES ORG_USERS ("name:role name:role")
+#           ORG_LOCAL (true = runs on this host) ORG_HOST_ADDRS (address of the host it runs on, if not here)
+# Two hosts (config/host.json, TG-031): MULTI_HOST=true, ORDERER_LOCAL, ORDERER_HOST_ADDR, PUBLISH_ADDRESS.
+# On a single host every *_LOCAL is true and MULTI_HOST=false.
 
 DERIVED_FILE="${PWD}/config/network.derived.json"
 
@@ -52,6 +55,10 @@ ORDERER_ADMIN_PORT="$(_j .orderer.adminPort)"
 ORDERER_CA_NAME="$(_j .orderer.caName)"
 ORDERER_CA_SLUG="$(_j .orderer.caSlug)"
 ORDERER_CA_PORT="$(_j .orderer.caPort)"
+ORDERER_LOCAL="$(_j '.orderer.local != false')"
+ORDERER_HOST_ADDR="$(_j '.orderer.hostAddress // ""')"
+MULTI_HOST="$(_j '.hosts != null')"
+PUBLISH_ADDRESS="$(_j '.hosts.publishAddress // ""')"
 
 WALLET_DIR="$(_j .paths.wallet)"
 SECRETS_FILE="${PWD}/config/secrets/secrets.json"
@@ -60,16 +67,17 @@ COMPOSE_ENV="${PWD}/config/secrets/compose.env"
 ORG_COUNT="$(_j '.orgs | length')"
 ORG_LABELS=(); ORG_TYPES=(); ORG_MSPIDS=(); ORG_DOMAINS=(); ORG_PEER_HOSTS=()
 ORG_PEER_PORTS=(); ORG_CHAINCODE_PORTS=(); ORG_OPS_PORTS=()
-ORG_CA_NAMES=(); ORG_CA_SLUGS=(); ORG_CA_PORTS=(); ORG_ENDORSES=(); ORG_USERS=()
+ORG_CA_NAMES=(); ORG_CA_SLUGS=(); ORG_CA_PORTS=(); ORG_ENDORSES=(); ORG_USERS=(); ORG_LOCAL=(); ORG_HOST_ADDRS=()
 
-while IFS=$'\t' read -r label type msp domain host pport ccport ops caname caslug caport endorses users; do
+while IFS=$'\t' read -r label type msp domain host pport ccport ops caname caslug caport endorses local haddr users; do
     ORG_LABELS+=("${label}");   ORG_TYPES+=("${type}");      ORG_MSPIDS+=("${msp}")
     ORG_DOMAINS+=("${domain}"); ORG_PEER_HOSTS+=("${host}")
     ORG_PEER_PORTS+=("${pport}"); ORG_CHAINCODE_PORTS+=("${ccport}"); ORG_OPS_PORTS+=("${ops}")
     ORG_CA_NAMES+=("${caname}"); ORG_CA_SLUGS+=("${caslug}"); ORG_CA_PORTS+=("${caport}")
-    ORG_ENDORSES+=("${endorses}"); ORG_USERS+=("${users}")
+    ORG_ENDORSES+=("${endorses}"); ORG_USERS+=("${users}"); ORG_LOCAL+=("${local}"); ORG_HOST_ADDRS+=("${haddr}")
 done < <(jq -r '.orgs[] | [.label, .type, .mspId, .domain, .peerHost, .peerPort, .chaincodePort,
                            .opsPort, .caName, .caSlug, .caPort, (.endorses|tostring),
+                           ((.local != false)|tostring), (.hostAddress // "-"),
                            ([.users[] | "\(.name):\(.role)"] | join(" "))] | @tsv' "${DERIVED_FILE}")
 
 # Read one secret by jq path, e.g.  secret '.ca["iinot-industry"]'
@@ -83,4 +91,14 @@ secret() {
     printf '%s' "${v}"
 }
 
+# Index of the first organisation that runs on this host (-1 if none)
+FIRST_LOCAL=-1
+for _i in $(seq 0 $((ORG_COUNT - 1))); do [ "${ORG_LOCAL[$_i]}" = "true" ] && { FIRST_LOCAL=${_i}; break; }; done
+isLocalOrg() { [ "${ORG_LOCAL[$1]}" = "true" ]; }
+
 echo "[INFO] Config loaded: ${NETWORK_NAME} | channel=${CHANNEL_NAME} | orgs=${ORG_COUNT} (${ORG_MSPIDS[*]}) | ${CC_LABEL} seq ${CC_SEQUENCE} | policy ${CC_POLICY}"
+if [ "${MULTI_HOST}" = "true" ]; then
+    _here=(); [ "${ORDERER_LOCAL}" = "true" ] && _here+=("orderer")
+    for _i in $(seq 0 $((ORG_COUNT - 1))); do isLocalOrg "${_i}" && _here+=("${ORG_MSPIDS[$_i]}"); done
+    echo "[INFO] Two-host layout (config/host.json): this host runs ${_here[*]}"
+fi
