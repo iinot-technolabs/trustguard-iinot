@@ -75,6 +75,7 @@ systemctl status trustguard-backend trustguard-gateway trustguard-oracle trustgu
 | --- | --- |
 | Update the software | `git pull && bash install.sh` |
 | Re-enrol identities | Admin page → *Enroll identities*, or `./scripts/network.sh identities` |
+| After a redeploy | `network.sh all` (and *Deploy* in the dashboard) restarts the gateway, oracle and escalation services that are running, so they connect to the new network; the dashboard backend reconnects by itself. If a service was stopped during the deploy, start it afterwards (`systemctl start trustguard-escalation`, …) |
 | Change the network rules | Admin page → *Rules Designer* → Save → *Apply saved rules to the network*, or `cd iinot-network && ./scripts/network.sh rules` (event types and access rules, enforced by chaincode 1.4; every version stays in the ledger history) |
 | Delete the network | `cd iinot-network && ./scripts/network.sh down` (ledgers and crypto are deleted; asks first) |
 | Rotate CA and identity secrets | `down`, then delete `iinot-network/config/secrets/`, then deploy again |

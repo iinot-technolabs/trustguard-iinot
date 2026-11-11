@@ -318,6 +318,20 @@ applyRules() {
     successln "Network rules v$(jq -r .rules.version <<<"${now}") are in force on '${CHANNEL_NAME}'."
 }
 
+# After a (re)deploy the app services still hold connections and certificates of the previous network:
+# restart the ones that are running so they connect to the new one at once. The dashboard backend is
+# left alone: it runs this deploy, and it drops connections made before the redeploy by itself.
+restartAppServices() {
+    command -v systemctl >/dev/null 2>&1 || return 0
+    local s restarted=()
+    for s in trustguard-gateway trustguard-oracle trustguard-escalation; do
+        if systemctl is-active --quiet "$s" 2>/dev/null; then
+            systemctl restart "$s" && restarted+=("$s") || warnln "could not restart $s"
+        fi
+    done
+    [ ${#restarted[@]} -eq 0 ] || infoln "Restarted for the new network: ${restarted[*]}"
+}
+
 enrollIdentities() {
     loadConfig
     . scripts/registerEnroll.sh
@@ -399,6 +413,7 @@ case "$1" in
         deployChaincode
         applyRules
         enrollIdentities
+        restartAppServices
         successln "Deployment complete. Network is ready."
         ;;
     *)

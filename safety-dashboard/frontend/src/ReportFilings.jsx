@@ -24,6 +24,7 @@ export default function ReportFilings({ incidentId, canFile = false, onChanged, 
   const [busy, setBusy]   = useState(false)
   const [error, setError] = useState(null)
   const [done, setDone]   = useState(null)
+  const [inputKey, setInputKey] = useState(0)   // remounts the file input after a filing
 
   const load = useCallback(async () => {
     try {
@@ -45,7 +46,7 @@ export default function ReportFilings({ incidentId, canFile = false, onChanged, 
       })
       const r = await axios.post(`/api/reports/${encodeURIComponent(incidentId)}/file`, { reportType: type, fileName: file.name, dataBase64 })
       setDone(`${type} v${r.data.version} recorded on the ledger · ${r.data.withinDeadline ? 'on time' : 'late'} · SHA-256 ${r.data.reportHash.slice(0, 12)}…`)
-      setFile(null); await load(); if (onChanged) await onChanged()
+      setFile(null); setInputKey(k => k + 1); await load(); if (onChanged) await onChanged()
     } catch (e) { setError(e.response?.data?.error || e.message) }
     finally { setBusy(false) }
   }
@@ -57,30 +58,29 @@ export default function ReportFilings({ incidentId, canFile = false, onChanged, 
       <div style={{ ...small, marginBottom: '6px' }}>
         Report types in force: {data.reportTypes.map(t => `${t.code} (${t.deadlineHours} h)`).join(' · ')}
       </div>
-      {data.filings.length > 0 && (
-        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12px', marginBottom: '8px' }}>
-          <tbody>
-            {data.filings.map(f => (
-              <tr key={`${f.reportType}-${f.version}`} style={{ borderTop: '1px solid #E2E8F0' }}>
-                <td style={{ padding: '4px 2px' }}><b>{f.reportType}</b> v{f.version}<div style={small}>{f.name}</div></td>
-                <td style={{ padding: '4px 2px' }}>{fmt(f.reportedAt)}<div style={small}>{f.withinDeadline ? 'on time' : 'late'}</div></td>
-                <td style={{ padding: '4px 2px', color: f.verified ? '#028090' : '#C0392B' }} title={f.reportHash}>{f.verified ? '✓ matches ledger' : '✗ no matching copy'}</td>
-                <td style={{ padding: '4px 2px', textAlign: 'right' }}>
-                  {f.file && <button style={btn('#FFFFFF', '#014F54', '1px solid #CBD5E1')} onClick={() => download(f.file)}>⬇ {f.file.name.length > 18 ? f.file.name.slice(0, 16) + '…' : f.file.name}</button>}
-                  {f.structured && onOpenForm18 && <button style={btn('#FFFFFF', '#014F54', '1px solid #CBD5E1')} onClick={onOpenForm18}>Open</button>}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      )}
+      {data.filings.map(f => (
+        <div key={`${f.reportType}-${f.version}`} style={{ borderTop: '1px solid #E2E8F0', padding: '6px 0', fontSize: '12px' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', gap: '8px', flexWrap: 'wrap' }}>
+            <span><b>{f.reportType}</b> v{f.version} · {f.withinDeadline ? 'on time' : 'late'}</span>
+            <span style={small}>{fmt(f.reportedAt)}</span>
+          </div>
+          <div style={small}>{f.name}</div>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px', marginTop: '4px', flexWrap: 'wrap' }}>
+            <span style={{ color: f.verified ? '#028090' : '#C0392B' }} title={`SHA-256 ${f.reportHash}`}>{f.verified ? '✓ matches ledger' : '✗ no matching copy'}</span>
+            {f.file && <button title={f.file.name} style={{ ...btn('#FFFFFF', '#014F54', '1px solid #CBD5E1'), maxWidth: '100%', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+                               onClick={() => download(f.file)}>⬇ {f.file.name}</button>}
+            {f.structured && onOpenForm18 && <button style={btn('#FFFFFF', '#014F54', '1px solid #CBD5E1')} onClick={onOpenForm18}>Open Form 18</button>}
+          </div>
+        </div>
+      ))}
+      {data.filings.length > 0 && <div style={{ borderTop: '1px solid #E2E8F0', marginBottom: '8px' }} />}
       {canFile && others.length > 0 && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', borderTop: '1px dashed #CBD5E1', paddingTop: '8px' }}>
           <div style={{ fontSize: '12px', fontWeight: 600, color: '#334155' }}>Attach a filed form of another type</div>
           <select value={type} onChange={e => setType(e.target.value)} style={{ padding: '6px', borderRadius: '6px', border: '1px solid #CBD5E1', fontSize: '12px' }}>
             {others.map(t => <option key={t.code} value={t.code}>{t.code} — {t.name} (due {t.deadlineHours} h)</option>)}
           </select>
-          <input type="file" accept=".pdf,.png,.jpg,.jpeg" onChange={e => setFile(e.target.files[0] || null)} style={{ fontSize: '12px' }} />
+          <input key={inputKey} type="file" accept=".pdf,.png,.jpg,.jpeg" onChange={e => setFile(e.target.files[0] || null)} style={{ fontSize: '12px' }} />
           <button disabled={!file || busy} onClick={submit} style={btn(file ? '#014F54' : '#CBD5E1')}>{busy ? 'Recording…' : 'Record on the ledger'}</button>
           <div style={small}>The file stays on this server; the ledger records its SHA-256 and the filing time.</div>
         </div>
